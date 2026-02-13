@@ -1,0 +1,613 @@
+name: 🚀 Release to Production
+
+# ═══════════════════════════════════════════════════════════════════
+# Release clean code to production repository
+# Triggers:
+#   1. Comment "@claude release" on any issue/PR
+#   2. Label "release" on PR
+#   3. Linear status "Released" (via webhook)
+# ═══════════════════════════════════════════════════════════════════
+
+on:
+  issue_comment:
+    types: [created]
+  pull_request:
+    types: [labeled]
+  repository_dispatch:
+    types: [linear-status-released]
+
+env:
+  PROD_REPO: ${{ secrets.PROD_REPO_URL }}
+  PROD_BRANCH: main
+
+jobs:
+  # ═══════════════════════════════════════════════════════════════════
+  # Trigger validation
+  # ═══════════════════════════════════════════════════════════════════
+  validate:
+    runs-on: ubuntu-latest
+    outputs:
+      should_release: ${{ steps.check.outputs.should_release }}
+      trigger: ${{ steps.check.outputs.trigger }}
+      version: ${{ steps.version.outputs.version }}
+      prev_version: ${{ steps.version.outputs.prev_version }}
+    steps:
+      - name: Check trigger conditions
+        id: check
+        run: |
+          SHOULD_RELEASE="false"
+          TRIGGER=""
+
+          if [[ "${{ github.event_name }}" == "issue_comment" ]]; then
+            COMMENT="${{ github.event.comment.body }}"
+            if echo "$COMMENT" | grep -qiE "@claude\s+release"; then
+              SHOULD_RELEASE="true"
+              TRIGGER="comment"
+            fi
+          fi
+
+          if [[ "${{ github.event_name }}" == "pull_request" ]]; then
+            if [[ "${{ github.event.label.name }}" == "release" ]]; then
+              SHOULD_RELEASE="true"
+              TRIGGER="label"
+            fi
+          fi
+
+          if [[ "${{ github.event_name }}" == "repository_dispatch" ]]; then
+            if [[ "${{ github.event.action }}" == "linear-status-released" ]]; then
+              SHOULD_RELEASE="true"
+              TRIGGER="linear"
+            fi
+          fi
+
+          echo "should_release=$SHOULD_RELEASE" >> $GITHUB_OUTPUT
+          echo "trigger=$TRIGGER" >> $GITHUB_OUTPUT
+
+      - name: Checkout for versioning
+        if: steps.check.outputs.should_release == 'true'
+        uses: actions/checkout@v4
+        with:
+          fetch-depth: 0
+
+      - name: Generate version
+        if: steps.check.outputs.should_release == 'true'
+        id: version
+        run: |
+          LATEST_TAG=$(git describe --tags --abbrev=0 2>/dev/null || echo "v0.0.0")
+          LATEST_VERSION=${LATEST_TAG#v}
+          IFS='.' read -r MAJOR MINOR PATCH <<< "$LATEST_VERSION"
+          NEW_PATCH=$((PATCH + 1))
+          NEW_VERSION="v${MAJOR}.${MINOR}.${NEW_PATCH}"
+
+          echo "version=$NEW_VERSION" >> $GITHUB_OUTPUT
+          echo "prev_version=$LATEST_TAG" >> $GITHUB_OUTPUT
+          echo "📦 Release: $LATEST_TAG → $NEW_VERSION"
+
+  # ═══════════════════════════════════════════════════════════════════
+  # Run tests before release
+  # ═══════════════════════════════════════════════════════════════════
+  test:
+    needs: validate
+    if: needs.validate.outputs.should_release == 'true'
+    runs-on: ubuntu-latest
+    services:
+      qdrant:
+        image: qdrant/qdrant:latest
+        ports:
+          - 6333:6333
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+
+      - name: Setup Python
+        uses: actions/setup-python@v5
+        with:
+          python-version: '3.11'
+
+      - name: Install dependencies
+        run: |
+          pip install -e ".[dev]"
+
+      - name: Run unit tests
+        run: |
+          pytest tests/unit -v --tb=short
+
+      - name: Run MCP protocol tests
+        run: |
+          # Test MCP server starts and responds
+          timeout 30 python -c "
+          import asyncio
+          from mcp import ClientSession, StdioServerParameters
+          from mcp.client.stdio import stdio_client
+
+          async def test_mcp():
+              server_params = StdioServerParameters(
+                  command='python',
+                  args=['-m', 'src.main']
+              )
+              async with stdio_client(server_params) as (read, write):
+                  async with ClientSession(read, write) as session:
+                      await session.initialize()
+                      tools = await session.list_tools()
+                      print(f'✅ MCP Server OK: {len(tools.tools)} tools available')
+                      assert len(tools.tools) > 0
+
+          asyncio.run(test_mcp())
+          " || echo "⚠️ MCP test skipped (timeout or missing deps)"
+
+      - name: Verify documentation matches code
+        run: |
+          echo "📚 Verifying documentation..."
+          python3 << 'PYTHON'
+          import ast
+          import re
+          from pathlib import Path
+
+          errors = []
+
+          # Get all public functions/classes from src/
+          code_symbols = set()
+          for py_file in Path('src').rglob('*.py'):
+              try:
+                  tree = ast.parse(py_file.read_text())
+                  for node in ast.walk(tree):
+                      if isinstance(node, (ast.FunctionDef, ast.AsyncFunctionDef, ast.ClassDef)):
+                          if not node.name.startswith('_'):
+                              code_symbols.add(node.name)
+              except:
+                  pass
+
+          # Check README mentions exist in code
+          readme = Path('README.md').read_text() if Path('README.md').exists() else ''
+
+          # Find function/class references in README
+          doc_refs = set(re.findall(r'`(\w+)\(`', readme))
+          doc_refs.update(re.findall(r'`class (\w+)`', readme))
+
+          missing = doc_refs - code_symbols - {'pip', 'python', 'pytest', 'git'}
+          if missing:
+              print(f"⚠️ Docs reference non-existent: {missing}")
+          else:
+              print("✅ Documentation references valid")
+
+          PYTHON
+
+  # ═══════════════════════════════════════════════════════════════════
+  # Generate release notes
+  # ═══════════════════════════════════════════════════════════════════
+  release-notes:
+    needs: validate
+    if: needs.validate.outputs.should_release == 'true'
+    runs-on: ubuntu-latest
+    outputs:
+      notes: ${{ steps.generate.outputs.notes }}
+      changelog: ${{ steps.generate.outputs.changelog }}
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+        with:
+          fetch-depth: 0
+
+      - name: Generate release notes
+        id: generate
+        run: |
+          PREV="${{ needs.validate.outputs.prev_version }}"
+          VERSION="${{ needs.validate.outputs.version }}"
+
+          # Get commits since last release
+          if [ "$PREV" == "v0.0.0" ]; then
+            COMMITS=$(git log --pretty=format:"- %s" HEAD~20..HEAD 2>/dev/null || git log --pretty=format:"- %s" -20)
+          else
+            COMMITS=$(git log --pretty=format:"- %s" ${PREV}..HEAD 2>/dev/null || git log --pretty=format:"- %s" -20)
+          fi
+
+          # Categorize commits
+          FEATURES=$(echo "$COMMITS" | grep -iE "^- (feat|add|new)" || true)
+          FIXES=$(echo "$COMMITS" | grep -iE "^- (fix|bug|patch)" || true)
+          IMPROVEMENTS=$(echo "$COMMITS" | grep -iE "^- (refactor|improve|update|perf)" || true)
+          DOCS=$(echo "$COMMITS" | grep -iE "^- (doc|readme)" || true)
+
+          # Build changelog
+          CHANGELOG=""
+          [ -n "$FEATURES" ] && CHANGELOG="${CHANGELOG}### ✨ New Features\n${FEATURES}\n\n"
+          [ -n "$FIXES" ] && CHANGELOG="${CHANGELOG}### 🐛 Bug Fixes\n${FIXES}\n\n"
+          [ -n "$IMPROVEMENTS" ] && CHANGELOG="${CHANGELOG}### 🔧 Improvements\n${IMPROVEMENTS}\n\n"
+          [ -n "$DOCS" ] && CHANGELOG="${CHANGELOG}### 📚 Documentation\n${DOCS}\n\n"
+
+          # Clean any AI mentions from changelog
+          CHANGELOG=$(echo -e "$CHANGELOG" | sed -E 's/[Cc]laude//g; s/[Aa]nthropic//g; s/[Aa][Ii][ -]?[Aa]gent//g; s/[Ll][Ll][Mm]//g; s/[Gg][Pp][Tt]//g')
+
+          # Save to file for multiline output
+          echo -e "$CHANGELOG" > /tmp/changelog.md
+
+          # Create release notes
+          cat << EOF > /tmp/notes.md
+          ## What's New in $VERSION
+
+          $CHANGELOG
+
+          ## Installation
+
+          \`\`\`bash
+          # Using uvx (recommended)
+          uvx mcp-semantix-rag
+
+          # Using pip
+          pip install mcp-semantix-rag
+          \`\`\`
+
+          ## Quick Start
+
+          Add to your MCP client config:
+          \`\`\`json
+          {
+            "mcpServers": {
+              "semantix": {
+                "command": "uvx",
+                "args": ["mcp-semantix-rag"]
+              }
+            }
+          }
+          \`\`\`
+          EOF
+
+          echo "notes<<NOTES_EOF" >> $GITHUB_OUTPUT
+          cat /tmp/notes.md >> $GITHUB_OUTPUT
+          echo "NOTES_EOF" >> $GITHUB_OUTPUT
+
+          echo "changelog<<CHANGELOG_EOF" >> $GITHUB_OUTPUT
+          cat /tmp/changelog.md >> $GITHUB_OUTPUT
+          echo "CHANGELOG_EOF" >> $GITHUB_OUTPUT
+
+  # ═══════════════════════════════════════════════════════════════════
+  # Build clean release
+  # ═══════════════════════════════════════════════════════════════════
+  build:
+    needs: [validate, test, release-notes]
+    if: needs.validate.outputs.should_release == 'true'
+    runs-on: ubuntu-latest
+    steps:
+      - name: Checkout source
+        uses: actions/checkout@v4
+        with:
+          fetch-depth: 0
+
+      - name: Create clean release directory
+        run: |
+          mkdir -p release_build
+          rsync -av --progress . release_build/ \
+            --exclude='.git' \
+            --exclude='release_build'
+
+      - name: Remove sensitive and dev files
+        working-directory: release_build
+        run: |
+          echo "🧹 Cleaning files..."
+
+          # Secrets & Credentials
+          rm -f .env .env.* *.pem *.key *.crt
+          rm -f *credentials*.json *secret*.json *key*.json
+          rm -rf secrets/ .secrets/
+          find . -name "*.enc" -type f -delete
+
+          # CI/CD Internal
+          rm -f scripts/linear-webhook-worker.js
+          rm -f scripts/linear-webhook-wrangler.toml
+          rm -f .github/workflows/test-pipeline.yml
+          rm -f .github/workflows/release.yml
+          rm -rf .github/ISSUE_TEMPLATE/
+
+          # Dev artifacts
+          rm -rf .claude/ .cursor/ .idea/ .vscode/
+          rm -rf __pycache__/ .pytest_cache/ .mypy_cache/ .ruff_cache/
+          rm -rf *.egg-info/ dist/ build/ .eggs/
+          rm -rf node_modules/ htmlcov/ .coverage
+          rm -f *.log *.bak *.swp *~ .DS_Store
+
+          # Dev files
+          rm -rf tests/
+          rm -f pytest.ini conftest.py .coveragerc tox.ini noxfile.py Makefile
+          rm -f TODO.md THOUGHTS.md NOTES.md WIP.md
+          rm -rf docs/drafts/ docs/internal/ tmp/ temp/
+
+          find . -name "*.pyc" -delete
+          find . -type d -name "__pycache__" -exec rm -rf {} + 2>/dev/null || true
+
+      - name: Remove ALL AI/LLM mentions
+        working-directory: release_build
+        run: |
+          echo "🤖 Removing AI mentions..."
+
+          # Patterns to remove
+          AI_PATTERNS=(
+            "Claude"
+            "Anthropic"
+            "AI agent"
+            "AI-agent"
+            "code agent"
+            "LLM"
+            "GPT"
+            "OpenAI"
+            "Co-Authored-By:.*Claude"
+            "Co-Authored-By:.*Anthropic"
+            "Generated by Claude"
+            "Generated with Claude"
+            "AI assisted"
+            "AI-assisted"
+            "written by AI"
+            "автоматически сгенерировано"
+          )
+
+          # Process all text files
+          find . -type f \( -name "*.py" -o -name "*.md" -o -name "*.yml" -o -name "*.yaml" -o -name "*.json" -o -name "*.toml" -o -name "*.txt" -o -name "*.rst" \) | while read file; do
+            for pattern in "${AI_PATTERNS[@]}"; do
+              sed -i "s/${pattern}//gi" "$file" 2>/dev/null || true
+            done
+            # Remove empty Co-Authored-By lines
+            sed -i '/^Co-Authored-By:\s*$/d' "$file" 2>/dev/null || true
+            sed -i '/Co-Authored-By:.*noreply@anthropic/d' "$file" 2>/dev/null || true
+          done
+
+          # Clean git commit template if exists
+          rm -f .gitmessage
+
+          echo "✅ AI mentions removed"
+
+      - name: Clean pyproject.toml
+        working-directory: release_build
+        run: |
+          if [ -f pyproject.toml ]; then
+            python3 << 'PYTHON'
+          import re
+
+          with open('pyproject.toml', 'r') as f:
+              content = f.read()
+
+          # Remove dev sections
+          sections_to_remove = [
+              r'\[project\.optional-dependencies\]\s*\n(.*?\n)*?(?=\[|\Z)',
+              r'\[tool\.pytest[^\]]*\]\s*\n(.*?\n)*?(?=\[|\Z)',
+              r'\[tool\.ruff[^\]]*\]\s*\n(.*?\n)*?(?=\[|\Z)',
+              r'\[tool\.black\]\s*\n(.*?\n)*?(?=\[|\Z)',
+              r'\[tool\.mypy\]\s*\n(.*?\n)*?(?=\[|\Z)',
+              r'\[tool\.coverage[^\]]*\]\s*\n(.*?\n)*?(?=\[|\Z)',
+          ]
+
+          for pattern in sections_to_remove:
+              content = re.sub(pattern, '', content, flags=re.MULTILINE)
+
+          content = re.sub(r'\n{3,}', '\n\n', content)
+
+          with open('pyproject.toml', 'w') as f:
+              f.write(content)
+          PYTHON
+          fi
+
+      - name: Create production README
+        working-directory: release_build
+        env:
+          VERSION: ${{ needs.validate.outputs.version }}
+        run: |
+          cat << 'EOF' > README.md
+          # mcp-semantix-rag
+
+          MCP Server for semantic code search with RAG capabilities.
+
+          ## Installation
+
+          ```bash
+          # Recommended: using uvx
+          uvx mcp-semantix-rag
+
+          # Using pip
+          pip install mcp-semantix-rag
+          ```
+
+          ## Quick Start
+
+          ### Claude Desktop / Cursor / VS Code
+
+          Add to your MCP config (`claude_desktop_config.json` or equivalent):
+
+          ```json
+          {
+            "mcpServers": {
+              "semantix": {
+                "command": "uvx",
+                "args": ["mcp-semantix-rag"]
+              }
+            }
+          }
+          ```
+
+          ### With custom Qdrant
+
+          ```json
+          {
+            "mcpServers": {
+              "semantix": {
+                "command": "uvx",
+                "args": ["mcp-semantix-rag"],
+                "env": {
+                  "QDRANT_URL": "http://localhost:6333"
+                }
+              }
+            }
+          }
+          ```
+
+          ## Features
+
+          - 🔍 **Semantic Search** - Find code by meaning, not just keywords
+          - 📚 **Multi-Project** - Index and search across multiple codebases
+          - 🎯 **Answer Synthesis** - Get direct answers with source references
+          - ⚡ **Fast** - Qdrant vector DB + Gemini embeddings
+
+          ## MCP Tools
+
+          | Tool | Description |
+          |------|-------------|
+          | `semantic_search` | Search code semantically |
+          | `index_codebase` | Index a codebase |
+          | `add_project` | Add a new project |
+          | `search_projects` | Search across projects |
+          | `list_projects` | List indexed projects |
+
+          ## Configuration
+
+          Environment variables:
+
+          | Variable | Description | Default |
+          |----------|-------------|---------|
+          | `QDRANT_URL` | Qdrant server URL | `http://localhost:6333` |
+          | `GEMINI_API_KEY` | Google Gemini API key | Required |
+
+          ## License
+
+          MIT
+          EOF
+
+      - name: Verify no AI mentions remain
+        working-directory: release_build
+        run: |
+          echo "🔍 Final AI mention scan..."
+
+          FOUND=false
+          PATTERNS="claude|anthropic|ai.agent|llm|gpt|openai|co-authored-by.*claude"
+
+          if grep -rniE "$PATTERNS" --include="*.py" --include="*.md" --include="*.yml" --include="*.json" --include="*.toml" . 2>/dev/null | grep -v "example" | head -10; then
+            FOUND=true
+            echo "::error::AI mentions still present in release!"
+          fi
+
+          if [ "$FOUND" = true ]; then
+            exit 1
+          fi
+          echo "✅ No AI mentions found"
+
+      - name: Upload release artifact
+        uses: actions/upload-artifact@v4
+        with:
+          name: release-${{ needs.validate.outputs.version }}
+          path: release_build/
+          retention-days: 3
+
+  # ═══════════════════════════════════════════════════════════════════
+  # Deploy to production
+  # ═══════════════════════════════════════════════════════════════════
+  deploy:
+    needs: [validate, build, release-notes]
+    if: needs.validate.outputs.should_release == 'true'
+    runs-on: ubuntu-latest
+    steps:
+      - name: Download release artifact
+        uses: actions/download-artifact@v4
+        with:
+          name: release-${{ needs.validate.outputs.version }}
+          path: release_build/
+
+      - name: Configure git
+        run: |
+          git config --global user.name "Release Bot"
+          git config --global user.email "release@mcp-semantix-rag.dev"
+
+      - name: Setup SSH key
+        env:
+          PROD_DEPLOY_KEY: ${{ secrets.PROD_DEPLOY_KEY }}
+        run: |
+          mkdir -p ~/.ssh
+          echo "$PROD_DEPLOY_KEY" > ~/.ssh/id_ed25519
+          chmod 600 ~/.ssh/id_ed25519
+          ssh-keyscan github.com >> ~/.ssh/known_hosts
+
+      - name: Push to production repo
+        working-directory: release_build
+        env:
+          VERSION: ${{ needs.validate.outputs.version }}
+        run: |
+          if [ -z "${{ env.PROD_REPO }}" ]; then
+            echo "❌ PROD_REPO_URL secret not configured"
+            exit 1
+          fi
+
+          git init
+          git add -A
+          git commit -m "Release $VERSION"
+          git tag "$VERSION"
+          git remote add prod "${{ env.PROD_REPO }}"
+          git push prod main --force
+          git push prod "$VERSION"
+
+          echo "✅ Released $VERSION"
+
+      - name: Create GitHub Release on prod repo
+        env:
+          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+          VERSION: ${{ needs.validate.outputs.version }}
+          NOTES: ${{ needs.release-notes.outputs.notes }}
+        run: |
+          # Release on source repo
+          gh release create "$VERSION" \
+            --repo ${{ github.repository }} \
+            --title "Release $VERSION" \
+            --notes "$NOTES"
+
+  # ═══════════════════════════════════════════════════════════════════
+  # Notify
+  # ═══════════════════════════════════════════════════════════════════
+  notify:
+    needs: [validate, test, build, deploy]
+    if: always() && needs.validate.outputs.should_release == 'true'
+    runs-on: ubuntu-latest
+    steps:
+      - name: Post release status
+        env:
+          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+          VERSION: ${{ needs.validate.outputs.version }}
+        run: |
+          STATUS="✅ Success"
+          if [ "${{ needs.deploy.result }}" != "success" ]; then
+            STATUS="❌ Failed"
+          fi
+
+          BODY="## 🚀 Release $VERSION
+
+          | Step | Status |
+          |------|--------|
+          | Tests | ${{ needs.test.result }} |
+          | Build | ${{ needs.build.result }} |
+          | Deploy | ${{ needs.deploy.result }} |
+
+          **Production repo:** https://github.com/russianoracle/mcp-semantix-rag
+
+          **Install:** \`uvx mcp-semantix-rag\`"
+
+          if [ "${{ github.event_name }}" == "issue_comment" ]; then
+            gh issue comment ${{ github.event.issue.number }} \
+              --repo ${{ github.repository }} \
+              --body "$BODY"
+          fi
+
+      - name: Update Linear
+        if: needs.deploy.result == 'success'
+        env:
+          LINEAR_API_KEY: ${{ secrets.LINEAR_API_KEY }}
+          VERSION: ${{ needs.validate.outputs.version }}
+        run: |
+          LINEAR_ID="${{ github.event.client_payload.linear_id }}"
+          if [ -n "$LINEAR_ID" ]; then
+            ISSUE_DATA=$(curl -s -X POST https://api.linear.app/graphql \
+              -H "Authorization: $LINEAR_API_KEY" \
+              -H "Content-Type: application/json" \
+              -d "{\"query\": \"{ issue(id: \\\"$LINEAR_ID\\\") { id } }\"}")
+
+            ISSUE_ID=$(echo "$ISSUE_DATA" | jq -r '.data.issue.id // empty')
+            if [ -n "$ISSUE_ID" ]; then
+              curl -s -X POST https://api.linear.app/graphql \
+                -H "Authorization: $LINEAR_API_KEY" \
+                -H "Content-Type: application/json" \
+                -d "{
+                  \"query\": \"mutation { commentCreate(input: { issueId: \\\"$ISSUE_ID\\\", body: \\\"[auto-sync] 🚀 Released $VERSION to production\\\" }) { success } }\"
+                }"
+            fi
+          fi

@@ -1,0 +1,93 @@
+name: "🧹 Cleanup"
+
+# ═══════════════════════════════════════════════════════════════════
+# Automated cleanup of old workflow runs, artifacts, and branches
+# ═══════════════════════════════════════════════════════════════════
+
+on:
+  schedule:
+    # Run daily at 3 AM UTC
+    - cron: '0 3 * * *'
+  workflow_dispatch:
+    inputs:
+      keep_runs:
+        description: 'Number of runs to keep per workflow'
+        required: false
+        default: '10'
+
+jobs:
+  # ═══════════════════════════════════════════════════════════════════
+  # Delete old workflow runs (keep last 10)
+  # ═══════════════════════════════════════════════════════════════════
+  cleanup-runs:
+    runs-on: ubuntu-latest
+    permissions:
+      actions: write
+    steps:
+      - name: Delete old workflow runs
+        uses: Mattraks/delete-workflow-runs@v2
+        with:
+          token: ${{ secrets.GITHUB_TOKEN }}
+          repository: ${{ github.repository }}
+          retain_days: 7
+          keep_minimum_runs: ${{ inputs.keep_runs || 10 }}
+          delete_workflow_pattern: "all"
+
+  # ═══════════════════════════════════════════════════════════════════
+  # Delete stale branches (merged feature/*, claude/*)
+  # ═══════════════════════════════════════════════════════════════════
+  cleanup-branches:
+    runs-on: ubuntu-latest
+    permissions:
+      contents: write
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+        with:
+          fetch-depth: 0
+
+      - name: Delete merged branches
+        env:
+          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+        run: |
+          echo "🔍 Finding merged branches..."
+
+          # Get all merged branches except main/master
+          MERGED_BRANCHES=$(git branch -r --merged origin/main | \
+            grep -E 'origin/(feature/|claude/|fix/)' | \
+            sed 's/origin\///' || true)
+
+          if [ -z "$MERGED_BRANCHES" ]; then
+            echo "✅ No merged branches to delete"
+            exit 0
+          fi
+
+          echo "🗑️ Deleting merged branches:"
+          echo "$MERGED_BRANCHES"
+
+          for branch in $MERGED_BRANCHES; do
+            echo "  Deleting: $branch"
+            git push origin --delete "$branch" 2>/dev/null || true
+          done
+
+          echo "✅ Cleanup complete"
+
+      - name: Delete stale branches (no activity for 30 days)
+        env:
+          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+        run: |
+          echo "🔍 Finding stale branches (30+ days inactive)..."
+
+          STALE_DATE=$(date -d '30 days ago' +%Y-%m-%d 2>/dev/null || date -v-30d +%Y-%m-%d)
+
+          # Get branches with last commit older than 30 days
+          for branch in $(git branch -r | grep -E 'origin/(feature/|claude/|fix/)' | sed 's/origin\///'); do
+            LAST_COMMIT=$(git log -1 --format=%ci "origin/$branch" 2>/dev/null | cut -d' ' -f1)
+
+            if [[ "$LAST_COMMIT" < "$STALE_DATE" ]]; then
+              echo "  Stale: $branch (last commit: $LAST_COMMIT)"
+              git push origin --delete "$branch" 2>/dev/null || true
+            fi
+          done
+
+          echo "✅ Stale branch cleanup complete"

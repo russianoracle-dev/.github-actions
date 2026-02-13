@@ -1,0 +1,242 @@
+name: 🧪 Test CI/CD Pipeline
+
+# ═══════════════════════════════════════════════════════════════════
+# Manual test workflow - trigger from GitHub UI or phone
+# Tests all pipeline components without making real changes
+# ═══════════════════════════════════════════════════════════════════
+
+on:
+  workflow_dispatch:
+    inputs:
+      test_type:
+        description: 'What to test'
+        required: true
+        default: 'full'
+        type: choice
+        options:
+          - full           # All components
+          - webhook        # Webhook → GitHub dispatch
+          - linear-sync    # Linear API connectivity
+          - model-select   # Model selection logic
+          - skills         # Skills invocation
+          - dry-run        # Simulate implementation (no changes)
+
+      label_type:
+        description: 'Simulate label type'
+        required: false
+        default: 'feature'
+        type: choice
+        options:
+          - architecture
+          - bug
+          - feature
+          - default
+
+      notify:
+        description: 'Post results to issue #'
+        required: false
+        type: string
+
+jobs:
+  # ═══════════════════════════════════════════════════════════════════
+  # Test: Webhook connectivity
+  # ═══════════════════════════════════════════════════════════════════
+  test-webhook:
+    if: inputs.test_type == 'full' || inputs.test_type == 'webhook'
+    runs-on: ubuntu-latest
+    steps:
+      - name: Test webhook endpoint
+        id: webhook
+        run: |
+          echo "🔗 Testing webhook endpoint..."
+
+          RESPONSE=$(curl -s -o /dev/null -w "%{http_code}" \
+            -X POST https://linear-webhook-proxy.factsar.workers.dev \
+            -H "Content-Type: application/json" \
+            -d '{"type": "Test", "action": "ping"}')
+
+          if [ "$RESPONSE" == "200" ]; then
+            echo "✅ Webhook endpoint is reachable"
+            echo "status=success" >> $GITHUB_OUTPUT
+          else
+            echo "❌ Webhook returned: $RESPONSE"
+            echo "status=failed" >> $GITHUB_OUTPUT
+          fi
+
+      - name: Report webhook status
+        run: |
+          echo "## Webhook Test" >> $GITHUB_STEP_SUMMARY
+          echo "- Endpoint: \`https://linear-webhook-proxy.factsar.workers.dev\`" >> $GITHUB_STEP_SUMMARY
+          echo "- Status: ${{ steps.webhook.outputs.status }}" >> $GITHUB_STEP_SUMMARY
+
+  # ═══════════════════════════════════════════════════════════════════
+  # Test: Linear API connectivity
+  # ═══════════════════════════════════════════════════════════════════
+  test-linear:
+    if: inputs.test_type == 'full' || inputs.test_type == 'linear-sync'
+    runs-on: ubuntu-latest
+    env:
+      LINEAR_API_KEY: ${{ secrets.LINEAR_API_KEY }}
+    steps:
+      - name: Test Linear API
+        id: linear
+        run: |
+          echo "🔗 Testing Linear API..."
+
+          RESPONSE=$(curl -s -X POST https://api.linear.app/graphql \
+            -H "Authorization: $LINEAR_API_KEY" \
+            -H "Content-Type: application/json" \
+            -d '{"query": "{ viewer { id name } }"}')
+
+          USER_NAME=$(echo "$RESPONSE" | jq -r '.data.viewer.name // empty')
+
+          if [ -n "$USER_NAME" ]; then
+            echo "✅ Linear API connected as: $USER_NAME"
+            echo "status=success" >> $GITHUB_OUTPUT
+            echo "user=$USER_NAME" >> $GITHUB_OUTPUT
+          else
+            echo "❌ Linear API error"
+            echo "status=failed" >> $GITHUB_OUTPUT
+          fi
+
+      - name: List workflow states
+        if: steps.linear.outputs.status == 'success'
+        run: |
+          echo "📊 Fetching workflow states..."
+
+          curl -s -X POST https://api.linear.app/graphql \
+            -H "Authorization: $LINEAR_API_KEY" \
+            -H "Content-Type: application/json" \
+            -d '{"query": "{ workflowStates { nodes { id name type } } }"}' \
+            | jq '.data.workflowStates.nodes[] | "\(.name) (\(.type))"'
+
+      - name: Report Linear status
+        run: |
+          echo "## Linear API Test" >> $GITHUB_STEP_SUMMARY
+          echo "- Status: ${{ steps.linear.outputs.status }}" >> $GITHUB_STEP_SUMMARY
+          echo "- User: ${{ steps.linear.outputs.user }}" >> $GITHUB_STEP_SUMMARY
+
+  # ═══════════════════════════════════════════════════════════════════
+  # Test: Model selection logic
+  # ═══════════════════════════════════════════════════════════════════
+  test-model-selection:
+    if: inputs.test_type == 'full' || inputs.test_type == 'model-select'
+    runs-on: ubuntu-latest
+    steps:
+      - name: Test model selection for ${{ inputs.label_type }}
+        id: model
+        run: |
+          LABEL="${{ inputs.label_type }}"
+
+          case "$LABEL" in
+            architecture)
+              echo "analysis=opus" >> $GITHUB_OUTPUT
+              echo "code=sonnet" >> $GITHUB_OUTPUT
+              echo "tests=haiku" >> $GITHUB_OUTPUT
+              echo "skills=/systematic-debugging /subagent-driven-development /verification-before-completion" >> $GITHUB_OUTPUT
+              ;;
+            bug)
+              echo "analysis=sonnet" >> $GITHUB_OUTPUT
+              echo "code=haiku" >> $GITHUB_OUTPUT
+              echo "tests=haiku" >> $GITHUB_OUTPUT
+              echo "skills=/debug-session:debug-session /systematic-debugging /verification-before-completion" >> $GITHUB_OUTPUT
+              ;;
+            feature)
+              echo "analysis=sonnet" >> $GITHUB_OUTPUT
+              echo "code=haiku" >> $GITHUB_OUTPUT
+              echo "tests=haiku" >> $GITHUB_OUTPUT
+              echo "skills=/subagent-driven-development /verification-before-completion" >> $GITHUB_OUTPUT
+              ;;
+            *)
+              echo "analysis=sonnet" >> $GITHUB_OUTPUT
+              echo "code=sonnet" >> $GITHUB_OUTPUT
+              echo "tests=sonnet" >> $GITHUB_OUTPUT
+              echo "skills=/verification-before-completion" >> $GITHUB_OUTPUT
+              ;;
+          esac
+
+      - name: Report model selection
+        run: |
+          echo "## Model Selection Test" >> $GITHUB_STEP_SUMMARY
+          echo "| Component | Model |" >> $GITHUB_STEP_SUMMARY
+          echo "|-----------|-------|" >> $GITHUB_STEP_SUMMARY
+          echo "| Label | \`${{ inputs.label_type }}\` |" >> $GITHUB_STEP_SUMMARY
+          echo "| Analysis | \`${{ steps.model.outputs.analysis }}\` |" >> $GITHUB_STEP_SUMMARY
+          echo "| Code | \`${{ steps.model.outputs.code }}\` |" >> $GITHUB_STEP_SUMMARY
+          echo "| Tests | \`${{ steps.model.outputs.tests }}\` |" >> $GITHUB_STEP_SUMMARY
+          echo "" >> $GITHUB_STEP_SUMMARY
+          echo "**Skills:** \`${{ steps.model.outputs.skills }}\`" >> $GITHUB_STEP_SUMMARY
+
+  # ═══════════════════════════════════════════════════════════════════
+  # Test: Dry-run implementation (no real changes)
+  # ═══════════════════════════════════════════════════════════════════
+  test-dry-run:
+    if: inputs.test_type == 'full' || inputs.test_type == 'dry-run'
+    runs-on: ubuntu-latest
+    permissions:
+      contents: read
+      pull-requests: read
+      issues: read
+      id-token: write
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+
+      - name: Dry-run Claude (read-only)
+        uses: anthropics/claude-code-action@v1
+        with:
+          claude_code_oauth_token: ${{ secrets.CLAUDE_CODE_OAUTH_TOKEN }}
+          claude_args: |
+            --model haiku
+          prompt: |
+            🧪 This is a DRY-RUN TEST. Do NOT make any changes.
+
+            ## Test Parameters
+            - Label type: ${{ inputs.label_type }}
+            - Test type: ${{ inputs.test_type }}
+
+            ## Task
+            1. Confirm you can read the codebase
+            2. List 3 files you would modify for a typical "${{ inputs.label_type }}" task
+            3. Explain the model selection that would apply
+            4. DO NOT create branches, commits, or PRs
+
+            Just report what you would do. This is a connectivity test.
+
+  # ═══════════════════════════════════════════════════════════════════
+  # Summary: Post results
+  # ═══════════════════════════════════════════════════════════════════
+  summary:
+    needs: [test-webhook, test-linear, test-model-selection, test-dry-run]
+    if: always()
+    runs-on: ubuntu-latest
+    steps:
+      - name: Generate summary
+        run: |
+          echo "# 🧪 Pipeline Test Results" >> $GITHUB_STEP_SUMMARY
+          echo "" >> $GITHUB_STEP_SUMMARY
+          echo "| Test | Status |" >> $GITHUB_STEP_SUMMARY
+          echo "|------|--------|" >> $GITHUB_STEP_SUMMARY
+          echo "| Webhook | ${{ needs.test-webhook.result }} |" >> $GITHUB_STEP_SUMMARY
+          echo "| Linear API | ${{ needs.test-linear.result }} |" >> $GITHUB_STEP_SUMMARY
+          echo "| Model Selection | ${{ needs.test-model-selection.result }} |" >> $GITHUB_STEP_SUMMARY
+          echo "| Dry-run | ${{ needs.test-dry-run.result }} |" >> $GITHUB_STEP_SUMMARY
+          echo "" >> $GITHUB_STEP_SUMMARY
+          echo "---" >> $GITHUB_STEP_SUMMARY
+          echo "Triggered: \`${{ github.event.inputs.test_type }}\` with label \`${{ github.event.inputs.label_type }}\`" >> $GITHUB_STEP_SUMMARY
+
+      - name: Post to issue (if specified)
+        if: inputs.notify != ''
+        env:
+          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+        run: |
+          gh issue comment ${{ inputs.notify }} --repo ${{ github.repository }} --body "## 🧪 Pipeline Test Complete
+
+          | Test | Status |
+          |------|--------|
+          | Webhook | ${{ needs.test-webhook.result }} |
+          | Linear API | ${{ needs.test-linear.result }} |
+          | Model Selection | ${{ needs.test-model-selection.result }} |
+          | Dry-run | ${{ needs.test-dry-run.result }} |
+
+          [View full run](https://github.com/${{ github.repository }}/actions/runs/${{ github.run_id }})"

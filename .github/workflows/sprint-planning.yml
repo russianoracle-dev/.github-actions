@@ -1,0 +1,135 @@
+name: Sprint Planning
+
+on:
+  schedule:
+    # Every Monday at 9:00 AM UTC
+    - cron: '0 9 * * 1'
+  workflow_dispatch:
+    inputs:
+      team_id:
+        description: 'Linear Team ID (optional)'
+        required: false
+        default: ''
+      create_document:
+        description: 'Create sprint document in Linear'
+        required: false
+        default: 'true'
+
+env:
+  ANTHROPIC_BASE_URL: ${{ secrets.ANTHROPIC_BASE_URL }}
+
+jobs:
+  plan-sprint:
+    runs-on: ubuntu-latest
+    timeout-minutes: 30
+    permissions:
+      contents: read
+      issues: write
+      id-token: write
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+        with:
+          fetch-depth: 1
+
+      - name: Cache NPX packages
+        uses: actions/cache@v4
+        with:
+          path: ~/.npm
+          key: ${{ runner.os }}-npx-mcp-${{ hashFiles('.github/mcp-servers.json') }}
+          restore-keys: |
+            ${{ runner.os }}-npx-mcp-
+
+      - name: Create MCP config
+        env:
+          LINEAR_API_KEY: ${{ secrets.LINEAR_API_KEY }}
+        run: |
+          # Create MCP config with Linear API key
+          cat .github/mcp-servers.json | \
+            sed "s/\${LINEAR_API_KEY}/$LINEAR_API_KEY/g" | \
+            sed "s/\${ANTHROPIC_API_KEY}/${{ secrets.ANTHROPIC_API_KEY }}/g" \
+            > /tmp/mcp-config.json
+
+      - name: Load system prompts
+        run: |
+          cat > /tmp/system-prompt.txt << 'EOF'
+          # Sprint Planning Agent
+
+          You are a sprint planning assistant that analyzes Linear issues and creates sprint plans.
+
+          ## Your Tasks
+
+          1. Get current and upcoming cycles using `mcp__linear-server__list_cycles`
+          2. List issues in backlog and todo using `mcp__linear-server__list_issues`
+          3. Analyze priorities, estimates, and dependencies
+          4. Create a sprint planning document
+
+          ## Output Format
+
+          Create a sprint document with:
+          - Sprint goals (2-3 high-level objectives)
+          - Prioritized backlog (ordered by priority and dependencies)
+          - Capacity analysis (based on estimates)
+          - Risks and blockers
+
+          ## MCP Tools Available
+
+          - `mcp__linear-server__list_cycles` - Get sprint cycles
+          - `mcp__linear-server__list_issues` - List issues with filters
+          - `mcp__linear-server__get_issue` - Get issue details
+          - `mcp__linear-server__create_document` - Create sprint document (if requested)
+          EOF
+
+      - name: Run Sprint Planning
+        uses: anthropics/claude-code-action@v1
+        with:
+          anthropic_api_key: ${{ secrets.ANTHROPIC_API_KEY }}
+          claude_args: |
+            --model sonnet
+            --mcp-config /tmp/mcp-config.json
+            --append-system-prompt /tmp/system-prompt.txt
+          prompt: |
+            # Sprint Planning Task
+
+            Analyze the current sprint status and plan the upcoming sprint.
+
+            ## Instructions
+
+            1. **Get Cycles**: Use `mcp__linear-server__list_cycles` to find current and upcoming sprints
+            2. **List Issues**: Use `mcp__linear-server__list_issues` to get:
+               - Issues in "Backlog" state
+               - Issues in "Todo" state
+               - Issues currently "In Progress" (carryover)
+            3. **Analyze**: For each issue, consider:
+               - Priority (urgent, high, medium, low)
+               - Estimate (story points or time)
+               - Dependencies (blocked by other issues)
+               - Labels (feature, bug, tech-debt)
+            4. **Create Plan**: Generate a sprint plan with:
+               - 2-3 Sprint Goals
+               - Ordered list of issues to complete
+               - Capacity check (total estimate vs available)
+               - Identified risks
+
+            ${{ github.event.inputs.create_document == 'true' && '5. **Save Document**: Use `mcp__linear-server__create_document` to save the sprint plan' || '' }}
+
+            Team ID: ${{ github.event.inputs.team_id || 'auto-detect' }}
+
+            Begin analysis now.
+
+      - name: Create GitHub Issue Summary
+        if: always()
+        env:
+          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+        run: |
+          DATE=$(date +%Y-%m-%d)
+          gh issue create \
+            --repo ${{ github.repository }} \
+            --title "Sprint Planning - $DATE" \
+            --body "Sprint planning workflow completed.
+
+          **Run:** ${{ github.server_url }}/${{ github.repository }}/actions/runs/${{ github.run_id }}
+          **Status:** ${{ job.status }}
+
+          Check the workflow logs for the full sprint plan." \
+            --label "sprint-planning" || echo "Could not create issue"

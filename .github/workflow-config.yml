@@ -1,0 +1,85 @@
+# ═══════════════════════════════════════════════════════════════════
+# GitHub Actions Workflow Configuration
+# Reference values - copy to workflow YAML files when changing
+# ═══════════════════════════════════════════════════════════════════
+
+# Concurrency settings (prevents parallel AI runs)
+concurrency:
+  group: ai-workflows
+  cancel_in_progress: true
+
+# Job timeouts (minutes)
+timeouts:
+  mention: 30           # @claude responses
+  label: 45             # claude-implement label
+  assign: 45            # claude assignment
+  linear_implement: 60  # Linear → implementation
+  code_review: 20       # PR code review
+  integration_tests: 15 # Heavy tests with Qdrant
+
+# Artifact retention (days)
+retention:
+  test_results: 3
+  release_artifacts: 3
+
+# Quota limits
+quota:
+  free_tier_minutes_per_month: 2000
+  recommended_daily_limit: 66   # 2000 / 30 days
+
+# Trigger labels
+labels:
+  ai_implement: claude-implement
+  ai_review: needs-ai-review
+  integration_tests: run-integration-tests
+
+# ═══════════════════════════════════════════════════════════════════
+# Role-based System Prompts (.github/system-prompts/)
+# ═══════════════════════════════════════════════════════════════════
+# Each role has a dedicated system prompt file that defines:
+# - Identity and mindset
+# - Required skills to invoke
+# - Workflow steps
+# - Anti-patterns to avoid
+#
+# Role mapping by issue labels:
+roles:
+  # research, explore, investigation → architect.md (opus)
+  # architecture, arch               → architect.md (sonnet)
+  # bug, fix                         → debugger.md (haiku)
+  # feature, enhancement             → implementer.md (haiku)
+  # @claude mentions                 → responder.md
+  # code review                      → reviewer.md
+
+# Issue type → Model + Role + Skills mapping
+issue_types:
+  research:
+    labels: research, explore, investigation
+    model: opus
+    role: architect
+    skills: /ultrathink:ultrathink /brainstorming /systematic-debugging
+
+  architecture:
+    labels: architecture, arch
+    model: sonnet
+    role: architect
+    skills: /ultrathink:ultrathink /brainstorming /subagent-driven-development /verification-before-completion
+
+  bug:
+    labels: bug, fix
+    model: haiku
+    role: debugger
+    skills: /debug-session:debug-session /systematic-debugging /verification-before-completion
+
+  feature:
+    labels: feature, enhancement
+    model: haiku
+    role: implementer
+    skills: /subagent-driven-development /verification-before-completion /test-driven-development
+
+  default:
+    model: sonnet
+    role: implementer
+    skills: /verification-before-completion
+
+# NOTE: Model mapping (ANTHROPIC_DEFAULT_*_MODEL) is in claude-settings.json

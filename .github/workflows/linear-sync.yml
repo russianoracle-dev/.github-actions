@@ -1,0 +1,107 @@
+name: Linear to GitHub Sync
+
+# ═══════════════════════════════════════════════════════════════════
+# LINEAR → GITHUB: Webhook-triggered actions
+# For GITHUB → LINEAR sync, see pr-linear-sync.yml (uses MCP tools)
+# ═══════════════════════════════════════════════════════════════════
+
+on:
+  # Linear → GitHub (via Cloudflare Worker webhook)
+  repository_dispatch:
+    types:
+      - linear-status-approved   # Auto-merge PR
+      - linear-status-cancelled  # Close PR
+      - linear-status-todo       # Return to backlog, close PR
+
+env:
+  SYNC_MARKER: "[auto-sync]"
+
+jobs:
+  # ═══════════════════════════════════════════════════════════════════
+  # LINEAR → GITHUB: "Approved" → Auto-merge PR
+  # ═══════════════════════════════════════════════════════════════════
+  linear-approved:
+    if: github.event_name == 'repository_dispatch' && github.event.action == 'linear-status-approved'
+    runs-on: ubuntu-latest
+    permissions:
+      contents: write
+      pull-requests: write
+    steps:
+      - name: Find and merge PR
+        env:
+          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+        run: |
+          LINEAR_ID="${{ github.event.client_payload.linear_id }}"
+
+          # Find PR by Linear ID in title
+          PR_NUMBER=$(gh pr list --repo ${{ github.repository }} --json number,title \
+            --jq ".[] | select(.title | test(\"\\\\[$LINEAR_ID\\\\]\"; \"i\") or test(\"$LINEAR_ID\"; \"i\")) | .number" | head -1)
+
+          if [ -z "$PR_NUMBER" ]; then
+            echo "No PR found for $LINEAR_ID"
+            exit 0
+          fi
+
+          PR_STATE=$(gh pr view $PR_NUMBER --json state --jq '.state')
+          if [ "$PR_STATE" == "MERGED" ]; then
+            echo "PR already merged"
+            exit 0
+          fi
+
+          # Try auto-merge first, then direct merge
+          gh pr merge $PR_NUMBER --squash --auto \
+            || gh pr merge $PR_NUMBER --squash \
+            || echo "Could not merge PR #$PR_NUMBER"
+
+          gh pr comment $PR_NUMBER --body "${{ env.SYNC_MARKER }} Auto-merged via Linear 'Approved' status"
+
+  # ═══════════════════════════════════════════════════════════════════
+  # LINEAR → GITHUB: "Cancelled" → Close PR
+  # ═══════════════════════════════════════════════════════════════════
+  linear-cancelled:
+    if: github.event_name == 'repository_dispatch' && github.event.action == 'linear-status-cancelled'
+    runs-on: ubuntu-latest
+    permissions:
+      pull-requests: write
+    steps:
+      - name: Find and close PR
+        env:
+          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+        run: |
+          LINEAR_ID="${{ github.event.client_payload.linear_id }}"
+
+          PR_NUMBER=$(gh pr list --repo ${{ github.repository }} --json number,title \
+            --jq ".[] | select(.title | test(\"\\\\[$LINEAR_ID\\\\]\"; \"i\") or test(\"$LINEAR_ID\"; \"i\")) | .number" | head -1)
+
+          if [ -z "$PR_NUMBER" ]; then
+            exit 0
+          fi
+
+          PR_STATE=$(gh pr view $PR_NUMBER --json state --jq '.state')
+          if [ "$PR_STATE" != "OPEN" ]; then
+            exit 0
+          fi
+
+          gh pr close $PR_NUMBER --comment "${{ env.SYNC_MARKER }} Closed via Linear 'Cancelled' status"
+
+  # ═══════════════════════════════════════════════════════════════════
+  # LINEAR → GITHUB: "Todo/Backlog" → Close PR + Notify
+  # ═══════════════════════════════════════════════════════════════════
+  linear-todo:
+    if: github.event_name == 'repository_dispatch' && github.event.action == 'linear-status-todo'
+    runs-on: ubuntu-latest
+    permissions:
+      pull-requests: write
+    steps:
+      - name: Find and close PR
+        env:
+          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+        run: |
+          LINEAR_ID="${{ github.event.client_payload.linear_id }}"
+
+          PR_NUMBER=$(gh pr list --repo ${{ github.repository }} --state open --json number,title \
+            --jq ".[] | select(.title | test(\"\\\\[$LINEAR_ID\\\\]\"; \"i\") or test(\"$LINEAR_ID\"; \"i\")) | .number" | head -1)
+
+          if [ -n "$PR_NUMBER" ]; then
+            gh pr close $PR_NUMBER --comment "${{ env.SYNC_MARKER }} Task returned to backlog. PR closed."
+          fi

@@ -1,0 +1,135 @@
+name: Sync Statuses (GitHub to Linear)
+
+on:
+  workflow_dispatch:
+    inputs:
+      dry_run:
+        description: 'Dry run (show what would be updated)'
+        required: false
+        default: 'false'
+      auto_discover:
+        description: 'Auto-discover issues by Linear ID pattern in titles'
+        required: false
+        default: 'true'
+
+env:
+  ANTHROPIC_BASE_URL: ${{ secrets.ANTHROPIC_BASE_URL }}
+
+jobs:
+  sync:
+    runs-on: ubuntu-latest
+    timeout-minutes: 15
+    permissions:
+      contents: read
+      issues: read
+      id-token: write
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+
+      - name: Cache NPX packages
+        uses: actions/cache@v4
+        with:
+          path: ~/.npm
+          key: ${{ runner.os }}-npx-mcp-${{ hashFiles('.github/mcp-servers.json') }}
+          restore-keys: |
+            ${{ runner.os }}-npx-mcp-
+
+      - name: Create MCP config
+        env:
+          LINEAR_API_KEY: ${{ secrets.LINEAR_API_KEY }}
+        run: |
+          cat .github/mcp-servers.json | \
+            sed "s/\${LINEAR_API_KEY}/$LINEAR_API_KEY/g" | \
+            sed "s/\${ANTHROPIC_API_KEY}/${{ secrets.ANTHROPIC_API_KEY }}/g" \
+            > /tmp/mcp-config.json
+
+      - name: Discover linked issues
+        if: github.event.inputs.auto_discover == 'true'
+        id: discover
+        env:
+          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+        run: |
+          echo "Discovering GitHub issues with Linear IDs..."
+
+          # Get all open and recently closed issues
+          gh issue list --repo ${{ github.repository }} --state all --limit 100 --json number,title,state \
+            | jq -r '.[] | select(.title | test("[A-Z]+-[0-9]+")) | "\(.number):\(.state):\(.title | match("[A-Z]+-[0-9]+").string)"' \
+            > /tmp/issues.txt
+
+          echo "Found issues:"
+          cat /tmp/issues.txt
+
+          # Create JSON for Claude
+          echo "[" > /tmp/issues.json
+          first=true
+          while IFS=: read -r num state linear_id; do
+            if [ "$first" = true ]; then
+              first=false
+            else
+              echo "," >> /tmp/issues.json
+            fi
+            echo "{\"github_number\": $num, \"state\": \"$state\", \"linear_id\": \"$linear_id\"}" >> /tmp/issues.json
+          done < /tmp/issues.txt
+          echo "]" >> /tmp/issues.json
+
+          echo "issues_json=$(cat /tmp/issues.json | tr -d '\n')" >> $GITHUB_OUTPUT
+
+      - name: Sync via MCP
+        uses: anthropics/claude-code-action@v1
+        with:
+          anthropic_api_key: ${{ secrets.ANTHROPIC_API_KEY }}
+          claude_args: |
+            --model haiku
+            --mcp-config /tmp/mcp-config.json
+          prompt: |
+            # Sync GitHub Issues to Linear
+
+            Synchronize GitHub issue states to Linear.
+
+            ## Issues to Sync
+
+            ${{ steps.discover.outputs.issues_json || '[]' }}
+
+            ## Mapping Rules
+
+            | GitHub State | Linear State |
+            |--------------|--------------|
+            | OPEN | In Progress |
+            | CLOSED | Done |
+
+            ## Instructions
+
+            For each issue:
+
+            1. Get current Linear state using `mcp__linear-server__get_issue`
+            2. Compare with expected state based on GitHub status
+            3. If different:
+               ${{ github.event.inputs.dry_run == 'true' && '- Log what WOULD be updated (DRY RUN mode)' || '- Update using `mcp__linear-server__update_issue`' }}
+
+            ## Output Format
+
+            ```
+            SYNC REPORT
+            ===========
+
+            Updated:
+            - #XX (SMNTX-YY): GitHub CLOSED -> Linear "Done"
+
+            Already in sync:
+            - #XX (SMNTX-YY): Both show "In Progress"
+
+            Errors:
+            - #XX (SMNTX-YY): Issue not found in Linear
+            ```
+
+            Dry Run Mode: ${{ github.event.inputs.dry_run }}
+
+      - name: Summary
+        if: always()
+        run: |
+          echo "## Sync Status Summary" >> $GITHUB_STEP_SUMMARY
+          echo "" >> $GITHUB_STEP_SUMMARY
+          echo "**Dry Run:** ${{ github.event.inputs.dry_run }}" >> $GITHUB_STEP_SUMMARY
+          echo "**Auto Discover:** ${{ github.event.inputs.auto_discover }}" >> $GITHUB_STEP_SUMMARY
+          echo "**Status:** ${{ job.status }}" >> $GITHUB_STEP_SUMMARY

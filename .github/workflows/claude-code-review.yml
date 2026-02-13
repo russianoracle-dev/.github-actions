@@ -1,0 +1,189 @@
+name: Claude Code Review (On-Demand)
+
+# ═══════════════════════════════════════════════════════════════════
+# ON-DEMAND ONLY - Does NOT run on every PR to save costs
+# Trigger options:
+#   1. Add label 'needs-ai-review' to PR
+#   2. Comment '@claude /code-review' on PR (handled by claude.yml)
+#   3. Change Linear status to 'In Review' (triggers via repository_dispatch)
+# ═══════════════════════════════════════════════════════════════════
+
+on:
+  # Label-based trigger
+  pull_request:
+    types: [labeled]
+
+  # Linear → GitHub: "In Review" status triggers code review
+  repository_dispatch:
+    types:
+      - linear-status-in-review
+
+env:
+  ANTHROPIC_BASE_URL: ${{ secrets.ANTHROPIC_BASE_URL }}
+
+# ═══════════════════════════════════════════════════════════════════
+# QUOTA PROTECTION - values defined in .github/workflow-config.yml
+# ═══════════════════════════════════════════════════════════════════
+concurrency:
+  group: ai-workflows-${{ github.repository }}
+  cancel-in-progress: true
+
+jobs:
+  # ═══════════════════════════════════════════════════════════════════
+  # Code Review via Label
+  # Role: Code Reviewer
+  # ═══════════════════════════════════════════════════════════════════
+  claude-review-label:
+    if: |
+      github.event_name == 'pull_request' &&
+      github.event.action == 'labeled' &&
+      github.event.label.name == 'needs-ai-review'
+    runs-on: ubuntu-latest
+    timeout-minutes: 20
+    permissions:
+      contents: read
+      pull-requests: write
+      issues: read
+      id-token: write
+
+    steps:
+      - name: Checkout repository
+        uses: actions/checkout@v4
+        with:
+          fetch-depth: 1
+
+      - name: Load system prompts
+        run: |
+          BASE=$(cat .github/system-prompts/_base.md)
+          ROLE=$(cat .github/system-prompts/reviewer.md)
+          echo "${BASE}
+
+          ---
+
+          ${ROLE}" > /tmp/system-prompt.txt
+
+      - name: Create MCP config with secrets
+        run: |
+          sed 's/${ANTHROPIC_API_KEY}/${{ secrets.ANTHROPIC_API_KEY }}/g' \
+            .github/mcp-servers.json > /tmp/mcp-config.json
+
+      - name: Run Claude Code Review
+        id: claude-review
+        uses: anthropics/claude-code-action@v1
+        with:
+          anthropic_api_key: ${{ secrets.ANTHROPIC_API_KEY }}
+          settings: .github/claude-settings.json
+          claude_args: |
+            --mcp-config /tmp/mcp-config.json
+            --append-system-prompt /tmp/system-prompt.txt
+          plugin_marketplaces: 'https://github.com/anthropics/claude-code.git'
+          plugins: 'code-review@claude-code-plugins'
+          prompt: |
+            # Code Review Request
+
+            You are reviewing PR #${{ github.event.pull_request.number }}.
+
+            ## Context
+            - **Role**: Code Reviewer
+            - **PR**: ${{ github.repository }}/pull/${{ github.event.pull_request.number }}
+
+            ## Task
+            Use /code-review:code-review skill to review this PR.
+
+            /code-review:code-review ${{ github.repository }}/pull/${{ github.event.pull_request.number }}
+
+      - name: Remove review label after completion
+        if: always()
+        env:
+          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+        run: |
+          gh pr edit ${{ github.event.pull_request.number }} --remove-label "needs-ai-review" 2>/dev/null || true
+
+  # ═══════════════════════════════════════════════════════════════════
+  # Code Review via Linear Status
+  # Role: Code Reviewer
+  # ═══════════════════════════════════════════════════════════════════
+  claude-review-linear:
+    if: github.event_name == 'repository_dispatch' && github.event.action == 'linear-status-in-review'
+    runs-on: ubuntu-latest
+    timeout-minutes: 20
+    permissions:
+      contents: read
+      pull-requests: write
+      issues: read
+      id-token: write
+
+    steps:
+      - name: Find PR by Linear ID
+        id: find-pr
+        env:
+          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+        run: |
+          LINEAR_ID="${{ github.event.client_payload.linear_id }}"
+
+          PR_NUMBER=$(gh pr list --repo ${{ github.repository }} --json number,title \
+            --jq ".[] | select(.title | contains(\"[$LINEAR_ID]\")) | .number" | head -1)
+
+          if [ -z "$PR_NUMBER" ]; then
+            echo "No PR found for $LINEAR_ID"
+            echo "found=false" >> $GITHUB_OUTPUT
+            exit 0
+          fi
+
+          echo "pr_number=$PR_NUMBER" >> $GITHUB_OUTPUT
+          echo "found=true" >> $GITHUB_OUTPUT
+          echo "Found PR #$PR_NUMBER for $LINEAR_ID"
+
+          # Mark ready for review and request human reviewer
+          gh pr ready $PR_NUMBER 2>/dev/null || true
+          gh pr edit $PR_NUMBER --add-reviewer russianoracle 2>/dev/null || true
+
+      - name: Checkout repository
+        if: steps.find-pr.outputs.found == 'true'
+        uses: actions/checkout@v4
+        with:
+          fetch-depth: 1
+
+      - name: Load system prompts
+        if: steps.find-pr.outputs.found == 'true'
+        run: |
+          BASE=$(cat .github/system-prompts/_base.md)
+          ROLE=$(cat .github/system-prompts/reviewer.md)
+          echo "${BASE}
+
+          ---
+
+          ${ROLE}" > /tmp/system-prompt.txt
+
+      - name: Create MCP config with secrets
+        if: steps.find-pr.outputs.found == 'true'
+        run: |
+          sed 's/${ANTHROPIC_API_KEY}/${{ secrets.ANTHROPIC_API_KEY }}/g' \
+            .github/mcp-servers.json > /tmp/mcp-config.json
+
+      - name: Run Claude Code Review
+        if: steps.find-pr.outputs.found == 'true'
+        uses: anthropics/claude-code-action@v1
+        with:
+          anthropic_api_key: ${{ secrets.ANTHROPIC_API_KEY }}
+          settings: .github/claude-settings.json
+          claude_args: |
+            --mcp-config /tmp/mcp-config.json
+            --model ${{ github.event.client_payload.model_config.review_model || 'sonnet' }}
+            --append-system-prompt /tmp/system-prompt.txt
+          plugin_marketplaces: 'https://github.com/anthropics/claude-code.git'
+          plugins: 'code-review@claude-code-plugins'
+          prompt: |
+            # Code Review Request (Linear Triggered)
+
+            Linear issue "${{ github.event.client_payload.linear_id }}" moved to "In Review".
+
+            ## Context
+            - **Role**: Code Reviewer
+            - **Linear ID**: ${{ github.event.client_payload.linear_id }}
+            - **PR**: #${{ steps.find-pr.outputs.pr_number }}
+
+            ## Task
+            Use /code-review:code-review skill to review this PR.
+
+            /code-review:code-review ${{ github.repository }}/pull/${{ steps.find-pr.outputs.pr_number }}

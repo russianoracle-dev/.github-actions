@@ -1,0 +1,65 @@
+{
+  "mcpServers": {
+    "linear-server": {
+      "type": "stdio",
+      "command": "npx",
+      "args": ["-y", "@anthropic-ai/linear-mcp"],
+      "env": {
+        "LINEAR_API_KEY": "${LINEAR_API_KEY}"
+      },
+      "timeout": 30000,
+      "maxConcurrency": 5
+    },
+    "zai-mcp-server": {
+      "type": "stdio",
+      "command": "npx",
+      "args": ["-y", "@z_ai/mcp-server"],
+      "env": {
+        "Z_AI_API_KEY": "${ANTHROPIC_API_KEY}",
+        "Z_AI_MODE": "ZAI"
+      },
+      "timeout": 45000,
+      "maxConcurrency": 5
+    },
+    "web-search-prime": {
+      "type": "http",
+      "url": "https://api.z.ai/api/mcp/web_search_prime/mcp",
+      "headers": {
+        "Authorization": "Bearer ${ANTHROPIC_API_KEY}"
+      },
+      "timeout": 30000,
+      "maxConcurrency": 3,
+      "retryAttempts": 2
+    },
+    "web-reader": {
+      "type": "http",
+      "url": "https://api.z.ai/api/mcp/web_reader/mcp",
+      "headers": {
+        "Authorization": "Bearer ${ANTHROPIC_API_KEY}"
+      },
+      "timeout": 20000,
+      "maxConcurrency": 3,
+      "retryAttempts": 2
+    },
+    "zread": {
+      "type": "http",
+      "url": "https://api.z.ai/api/mcp/zread/mcp",
+      "headers": {
+        "Authorization": "Bearer ${ANTHROPIC_API_KEY}"
+      },
+      "timeout": 15000,
+      "maxConcurrency": 2,
+      "retryAttempts": 1
+    },
+    "github-server": {
+      "type": "stdio",
+      "command": "npx",
+      "args": ["-y", "@modelcontextprotocol/server-github"],
+      "env": {
+        "GITHUB_TOKEN": "${GITHUB_TOKEN}"
+      },
+      "timeout": 30000,
+      "maxConcurrency": 5
+    }
+  }
+}
