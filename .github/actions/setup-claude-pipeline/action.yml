@@ -1,0 +1,115 @@
+name: "Setup Claude Pipeline"
+description: "Loads system prompts and creates MCP config for claude-code-action"
+
+inputs:
+  role:
+    description: "Role prompt to load (e.g. implementer, responder, autonomous-executor)"
+    required: true
+  action:
+    description: "Detected action context (implement/respond/execute)"
+    required: false
+    default: ""
+  issue_number:
+    description: "GitHub issue number for progress reporting"
+    required: false
+    default: ""
+  anthropic_api_key:
+    description: "Anthropic API key for MCP config substitution"
+    required: true
+  github_token:
+    description: "GitHub token for MCP config substitution"
+    required: true
+  is_dispatch:
+    description: "Whether triggered by repository_dispatch (affects progress tool)"
+    required: false
+    default: "false"
+
+runs:
+  using: composite
+  steps:
+    - name: Load system prompts
+      shell: bash
+      run: |
+        ROLE="${{ inputs.role }}"
+        BASE=$(cat .github/system-prompts/_base.md)
+        ROLE_PROMPT=$(cat ".github/system-prompts/${ROLE}.md")
+
+        GITHUB_MCP_GUIDE=""
+        if [ -f ".github/system-prompts/github-mcp-usage.md" ]; then
+          GITHUB_MCP_GUIDE=$(cat .github/system-prompts/github-mcp-usage.md)
+        fi
+
+        ACTION_CONTEXT=""
+        if [ -n "${{ inputs.action }}" ]; then
+          ACTION_CONTEXT="**Detected Action:** ${{ inputs.action }}
+        **Role:** ${{ inputs.role }}
+
+        The user triggered this action via @claude mention or Linear status change. Proceed with the detected action above."
+        fi
+
+        cat > /tmp/system-prompt.txt << 'SYSPROMPT_EOF'
+        ${BASE}
+
+        ---
+
+        ${ROLE_PROMPT}
+        SYSPROMPT_EOF
+
+        # Append action context if provided
+        if [ -n "$ACTION_CONTEXT" ]; then
+          printf '\n---\n\n%s\n' "$ACTION_CONTEXT" >> /tmp/system-prompt.txt
+        fi
+
+        # Append GitHub MCP guide if present
+        if [ -n "$GITHUB_MCP_GUIDE" ]; then
+          printf '\n---\n\n%s\n' "$GITHUB_MCP_GUIDE" >> /tmp/system-prompt.txt
+        fi
+
+    - name: Create MCP config
+      shell: bash
+      env:
+        ANTHROPIC_API_KEY: ${{ inputs.anthropic_api_key }}
+        GITHUB_TOKEN: ${{ inputs.github_token }}
+      run: |
+        cat .github/mcp-servers.json | \
+          sed "s/\${ANTHROPIC_API_KEY}/${ANTHROPIC_API_KEY}/g" | \
+          sed "s/\${GITHUB_TOKEN}/${GITHUB_TOKEN}/g" \
+          > /tmp/mcp-config.json
+
+    - name: Create progress instructions
+      shell: bash
+      run: |
+        ISSUE_NUM="${{ inputs.issue_number }}"
+        IS_DISPATCH="${{ inputs.is_dispatch }}"
+
+        if [ "$IS_DISPATCH" = "true" ]; then
+          PROGRESS_TOOL="mcp__github-server__add_issue_comment с issue_number=${ISSUE_NUM}"
+          PROGRESS_EXAMPLE="mcp__github-server__add_issue_comment(owner=\"russianoracle\", repo=\"semantic-search-mcp\", issue_number=${ISSUE_NUM}, body=\"...\")"
+        else
+          PROGRESS_TOOL="mcp__github_comment__update_claude_comment (CLAUDE_COMMENT_ID задан автоматически)"
+          PROGRESS_EXAMPLE="mcp__github_comment__update_claude_comment(body=\"...\")"
+        fi
+
+        cat > /tmp/progress-instructions.txt << PROGRESS_EOF
+        ## 📊 PROGRESS REPORTING (ОБЯЗАТЕЛЬНО)
+
+        Используй MCP tool для обновления прогресса — НЕ bash/gh cli:
+        **Tool:** ${PROGRESS_TOOL}
+
+        \`\`\`
+        ${PROGRESS_EXAMPLE}
+        \`\`\`
+
+        С таким телом:
+        \`\`\`
+        ## Implementation Progress
+
+        ### 📋 Understanding
+        [Как понял задачу]
+
+        ### ✅ TODO
+        - [x] Завершённые шаги
+        - [ ] Текущий шаг
+        - [ ] Оставшиеся шаги
+        \`\`\`
+        PROGRESS_EOF

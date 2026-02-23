@@ -1,0 +1,13 @@
+name: "Cleanup Claude Pipeline"
+description: "Removes temporary files created during Claude pipeline execution"
+
+runs:
+  using: composite
+  steps:
+    - name: Cleanup temp files
+      shell: bash
+      run: |
+        rm -f /tmp/mcp-config.json
+        rm -f /tmp/system-prompt.txt
+        rm -f /tmp/progress-instructions.txt
+        rm -f ~/.git-credentials

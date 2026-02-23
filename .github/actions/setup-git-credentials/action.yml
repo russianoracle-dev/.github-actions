@@ -1,0 +1,19 @@
+name: "Setup Git Credentials"
+description: "Configures git credentials for pushing to GitHub"
+
+inputs:
+  github_token:
+    description: "GitHub token (GH_TOKEN or GITHUB_TOKEN)"
+    required: true
+
+runs:
+  using: composite
+  steps:
+    - name: Configure git credentials
+      shell: bash
+      env:
+        GH_TOKEN: ${{ inputs.github_token }}
+      run: |
+        git config --global credential.helper store
+        echo "https://x-access-token:${GH_TOKEN}@github.com" > ~/.git-credentials
+        echo "✅ Git credentials configured for push"
