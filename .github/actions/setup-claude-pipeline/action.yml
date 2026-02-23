@@ -43,6 +43,11 @@ runs:
           GITHUB_MCP_GUIDE=$(cat .github/system-prompts/github-mcp-usage.md)
         fi
 
+        LINEAR_GUIDE=""
+        if [ -f ".github/system-prompts/linear-integration.md" ]; then
+          LINEAR_GUIDE=$(cat .github/system-prompts/linear-integration.md)
+        fi
+
         ACTION_CONTEXT=""
         if [ -n "${{ inputs.action }}" ]; then
           ACTION_CONTEXT="**Detected Action:** ${{ inputs.action }}
@@ -69,6 +74,11 @@ runs:
           printf '\n---\n\n%s\n' "$GITHUB_MCP_GUIDE" >> /tmp/system-prompt.txt
         fi
 
+        # Append Linear integration guide if present
+        if [ -n "$LINEAR_GUIDE" ]; then
+          printf '\n---\n\n%s\n' "$LINEAR_GUIDE" >> /tmp/system-prompt.txt
+        fi
+
     - name: Create MCP config
       shell: bash
       env:
@@ -77,9 +87,9 @@ runs:
         LINEAR_API_KEY: ${{ inputs.linear_api_key }}
       run: |
         cat .github/mcp-servers.json | \
-          sed "s/\${ANTHROPIC_API_KEY}/${ANTHROPIC_API_KEY}/g" | \
-          sed "s/\${GITHUB_TOKEN}/${GITHUB_TOKEN}/g" | \
-          sed "s/\${LINEAR_API_KEY}/${LINEAR_API_KEY}/g" \
+          sed "s|\${ANTHROPIC_API_KEY}|${ANTHROPIC_API_KEY}|g" | \
+          sed "s|\${GITHUB_TOKEN}|${GITHUB_TOKEN}|g" | \
+          sed "s|\${LINEAR_API_KEY}|${LINEAR_API_KEY}|g" \
           > /tmp/mcp-config.json
 
     - name: Create progress instructions
@@ -89,15 +99,15 @@ runs:
         IS_DISPATCH="${{ inputs.is_dispatch }}"
 
         if [ "$IS_DISPATCH" = "true" ]; then
-          PROGRESS_TOOL="mcp__github-server__add_issue_comment с issue_number=${ISSUE_NUM}"
-          PROGRESS_EXAMPLE="mcp__github-server__add_issue_comment(owner=\"russianoracle-dev\", repo=\"semantic-search-mcp\", issue_number=${ISSUE_NUM}, body=\"...\")"
+          PROGRESS_TOOL="mcp__github__add_issue_comment с issue_number=${ISSUE_NUM}"
+          PROGRESS_EXAMPLE="mcp__github__add_issue_comment(owner=\"russianoracle-dev\", repo=\"semantic-search-mcp\", issue_number=${ISSUE_NUM}, body=\"...\")"
         else
           PROGRESS_TOOL="mcp__github_comment__update_claude_comment (CLAUDE_COMMENT_ID задан автоматически)"
           PROGRESS_EXAMPLE="mcp__github_comment__update_claude_comment(body=\"...\")"
         fi
 
         cat > /tmp/progress-instructions.txt << PROGRESS_EOF
-        ## 📊 PROGRESS REPORTING (ОБЯЗАТЕЛЬНО)
+        ## PROGRESS REPORTING
 
         Используй MCP tool для обновления прогресса — НЕ bash/gh cli:
         **Tool:** ${PROGRESS_TOOL}
@@ -110,10 +120,10 @@ runs:
         \`\`\`
         ## Implementation Progress
 
-        ### 📋 Understanding
+        ### Understanding
         [Как понял задачу]
 
-        ### ✅ TODO
+        ### TODO
         - [x] Завершённые шаги
         - [ ] Текущий шаг
         - [ ] Оставшиеся шаги
