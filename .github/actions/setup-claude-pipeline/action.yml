@@ -19,6 +19,10 @@ inputs:
   github_token:
     description: "GitHub token for MCP config substitution"
     required: true
+  linear_api_key:
+    description: "Linear API key for MCP config substitution"
+    required: false
+    default: ""
   is_dispatch:
     description: "Whether triggered by repository_dispatch (affects progress tool)"
     required: false
@@ -70,10 +74,12 @@ runs:
       env:
         ANTHROPIC_API_KEY: ${{ inputs.anthropic_api_key }}
         GITHUB_TOKEN: ${{ inputs.github_token }}
+        LINEAR_API_KEY: ${{ inputs.linear_api_key }}
       run: |
         cat .github/mcp-servers.json | \
           sed "s/\${ANTHROPIC_API_KEY}/${ANTHROPIC_API_KEY}/g" | \
-          sed "s/\${GITHUB_TOKEN}/${GITHUB_TOKEN}/g" \
+          sed "s/\${GITHUB_TOKEN}/${GITHUB_TOKEN}/g" | \
+          sed "s/\${LINEAR_API_KEY}/${LINEAR_API_KEY}/g" \
           > /tmp/mcp-config.json
 
     - name: Create progress instructions
@@ -84,7 +90,7 @@ runs:
 
         if [ "$IS_DISPATCH" = "true" ]; then
           PROGRESS_TOOL="mcp__github-server__add_issue_comment с issue_number=${ISSUE_NUM}"
-          PROGRESS_EXAMPLE="mcp__github-server__add_issue_comment(owner=\"russianoracle\", repo=\"semantic-search-mcp\", issue_number=${ISSUE_NUM}, body=\"...\")"
+          PROGRESS_EXAMPLE="mcp__github-server__add_issue_comment(owner=\"russianoracle-dev\", repo=\"semantic-search-mcp\", issue_number=${ISSUE_NUM}, body=\"...\")"
         else
           PROGRESS_TOOL="mcp__github_comment__update_claude_comment (CLAUDE_COMMENT_ID задан автоматически)"
           PROGRESS_EXAMPLE="mcp__github_comment__update_claude_comment(body=\"...\")"
