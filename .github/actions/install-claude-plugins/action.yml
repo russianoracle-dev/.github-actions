@@ -33,14 +33,17 @@ runs:
         # Create a temporary container (not started) to copy files out
         CONTAINER_ID=$(docker create "$IMAGE")
 
-        # Extract the Claude binary (remove stale file first to avoid permission issues)
-        rm -f /tmp/claude-runner
-        docker cp "$CONTAINER_ID:/root/.local/bin/claude" /tmp/claude-runner
-        chmod +x /tmp/claude-runner
+        # Unique path per run to avoid stale file conflicts
+        CLAUDE_BIN="/tmp/claude-runner-${GITHUB_RUN_ID}"
 
-        # Extract plugins directory (non-fatal if missing — first run after clean image)
+        # Extract binary: pipe through tar so the file is created by the runner user (not root)
+        docker cp "$CONTAINER_ID:/root/.local/bin/claude" - | tar -xO > "$CLAUDE_BIN"
+        chmod +x "$CLAUDE_BIN"
+
+        # Extract plugins directory
         mkdir -p "$HOME/.claude"
-        docker cp "$CONTAINER_ID:/root/.claude/plugins" "$HOME/.claude/plugins" 2>/dev/null \
+        docker cp "$CONTAINER_ID:/root/.claude/plugins" - \
+          | tar -xC "$HOME/.claude" 2>/dev/null \
           && echo "✅ Plugins extracted" \
           || echo "⚠️ No plugins dir in image, skipping"
 
@@ -48,7 +51,7 @@ runs:
         docker rm "$CONTAINER_ID"
 
         # Verify binary works
-        /tmp/claude-runner --version
+        "$CLAUDE_BIN" --version
 
-        echo "claude_path=/tmp/claude-runner" >> "$GITHUB_OUTPUT"
-        echo "✅ Claude Code ready at /tmp/claude-runner"
+        echo "claude_path=$CLAUDE_BIN" >> "$GITHUB_OUTPUT"
+        echo "✅ Ready at $CLAUDE_BIN"
