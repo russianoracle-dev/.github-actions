@@ -1,0 +1,91 @@
+name: "Notify Linear"
+description: "Post start or completion status comment to a Linear issue"
+
+inputs:
+  linear_api_key:
+    description: "Linear API key"
+    required: true
+  linear_id:
+    description: "Linear issue ID (e.g. SMNTX-83). No-op if empty."
+    required: false
+    default: ""
+  run_url:
+    description: "URL to the GitHub Actions run"
+    required: true
+  event:
+    description: "Event type: 'start' or 'complete'"
+    required: true
+  action:
+    description: "AI action type: respond | implement | execute | review"
+    required: false
+    default: "respond"
+  role:
+    description: "Agent role (for start event)"
+    required: false
+    default: ""
+  model:
+    description: "Model used (for start event)"
+    required: false
+    default: ""
+  status:
+    description: "Job status for complete event: success | failure | cancelled"
+    required: false
+    default: "success"
+
+runs:
+  using: composite
+  steps:
+    - name: Post Linear comment
+      shell: bash
+      env:
+        LINEAR_API_KEY: ${{ inputs.linear_api_key }}
+      run: |
+        LINEAR_ID="${{ inputs.linear_id }}"
+
+        # No-op if no Linear issue linked
+        if [ -z "$LINEAR_ID" ]; then
+          echo "No Linear ID — skipping notification"
+          exit 0
+        fi
+
+        RUN_URL="${{ inputs.run_url }}"
+        EVENT="${{ inputs.event }}"
+        ACTION="${{ inputs.action }}"
+        ROLE="${{ inputs.role }}"
+        MODEL="${{ inputs.model }}"
+        STATUS="${{ inputs.status }}"
+
+        # Resolve Linear issue UUID from identifier (e.g. SMNTX-83 → uuid)
+        ISSUE_DATA=$(curl -s -X POST https://api.linear.app/graphql \
+          -H "Authorization: $LINEAR_API_KEY" \
+          -H "Content-Type: application/json" \
+          -d "{\"query\": \"{ issue(id: \\\"$LINEAR_ID\\\") { id } }\"}")
+        ISSUE_ID=$(echo "$ISSUE_DATA" | jq -r '.data.issue.id // empty')
+
+        if [ -z "$ISSUE_ID" ]; then
+          echo "Could not resolve Linear issue $LINEAR_ID — skipping"
+          exit 0
+        fi
+
+        # Build message body
+        if [ "$EVENT" = "start" ]; then
+          BODY="🚀 **AI job started** (\`$ACTION\`)"
+          if [ -n "$ROLE" ];  then BODY="$BODY\n- Role: \`$ROLE\`";   fi
+          if [ -n "$MODEL" ]; then BODY="$BODY\n- Model: \`$MODEL\`"; fi
+          BODY="$BODY\n\n[View job]($RUN_URL)"
+        else
+          # complete
+          case "$STATUS" in
+            success)   EMOJI="✅"; MSG="completed successfully" ;;
+            cancelled) EMOJI="⏹️"; MSG="was cancelled"         ;;
+            *)         EMOJI="❌"; MSG="failed"                ;;
+          esac
+          BODY="$EMOJI **\`$ACTION\` $MSG**\n\n[View job]($RUN_URL)"
+        fi
+
+        curl -s -X POST https://api.linear.app/graphql \
+          -H "Authorization: $LINEAR_API_KEY" \
+          -H "Content-Type: application/json" \
+          -d "{\"query\": \"mutation { commentCreate(input: { issueId: \\\"$ISSUE_ID\\\", body: \\\"$BODY\\\" }) { success } }\"}"
+
+        echo "✅ Linear $EVENT notification sent for $LINEAR_ID ($ACTION)"
