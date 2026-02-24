@@ -56,7 +56,10 @@ runs:
         The user triggered this action via @claude mention or Linear status change. Proceed with the detected action above."
         fi
 
-        cat > /tmp/system-prompt.txt << 'SYSPROMPT_EOF'
+        # Language directive — always prepended, cannot be overridden by project prompts
+        printf '## Language (MANDATORY)\n\n**ВСЕГДА отвечай ТОЛЬКО на русском языке.** Все комментарии, объяснения, commit messages, PR описания, комментарии к issues — только по-русски. Технические термины, идентификаторы кода и имена файлов остаются в оригинальном виде.\n\n---\n\n' > /tmp/system-prompt.txt
+
+        cat >> /tmp/system-prompt.txt << 'SYSPROMPT_EOF'
         ${BASE}
 
         ---
