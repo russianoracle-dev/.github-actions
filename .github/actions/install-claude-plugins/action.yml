@@ -5,7 +5,7 @@ inputs:
   claude_version:
     description: "Claude Code CLI version to install"
     required: false
-    default: "2.1.6"
+    default: "latest"
 
 outputs:
   claude_path:
@@ -20,17 +20,22 @@ runs:
       shell: bash
       run: |
         CLAUDE_CODE_VERSION="${{ inputs.claude_version }}"
-        curl -fsSL https://claude.ai/install.sh | bash -s -- "$CLAUDE_CODE_VERSION"
+        if [ "$CLAUDE_CODE_VERSION" = "latest" ]; then
+          curl -fsSL https://claude.ai/install.sh | bash
+        else
+          curl -fsSL https://claude.ai/install.sh | bash -s -- "$CLAUDE_CODE_VERSION"
+        fi
         export PATH="$HOME/.local/bin:$PATH"
         echo "$HOME/.local/bin" >> "$GITHUB_PATH"
 
         echo "Adding plugin marketplaces..."
         claude plugin marketplace add https://github.com/obra/superpowers-marketplace.git || echo "⚠️ already added, continuing"
-        claude plugin marketplace add https://github.com/anthropics/claude-code.git || echo "⚠️ already added, continuing"
+        claude plugin marketplace add https://github.com/anthropics/claude-plugins-official.git || echo "⚠️ already added, continuing"
 
         echo "Installing plugins..."
         claude plugin install superpowers@superpowers-marketplace
-        claude plugin install feature-dev@claude-code-plugins
+        claude plugin install feature-dev@claude-plugins-official
+        claude plugin install serena@claude-plugins-official
         echo "✅ Plugins installed"
 
         echo "claude_path=$HOME/.local/bin/claude" >> "$GITHUB_OUTPUT"
