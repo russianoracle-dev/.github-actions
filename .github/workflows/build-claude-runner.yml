@@ -1,0 +1,91 @@
+name: "Build Claude Runner Image"
+
+# ═══════════════════════════════════════════════════════════════════════════
+# Builds and publishes pre-baked Docker image with Claude Code + plugins
+# to GHCR: ghcr.io/russianoracle-dev/claude-runner:latest
+#
+# Benefits:
+#   - Eliminates ~60-90s curl install + plugin setup on each AI job
+#   - Docker layer cache on self-hosted runner → ~3-5s on warm cache
+#   - Pinned sha tag for reproducible builds
+# ═══════════════════════════════════════════════════════════════════════════
+
+on:
+  workflow_dispatch:
+    inputs:
+      push_image:
+        description: "Push image to GHCR (false = build only)"
+        required: false
+        default: "true"
+        type: choice
+        options: ["true", "false"]
+
+  schedule:
+    # Weekly rebuild on Monday at 04:00 UTC — picks up plugin updates
+    - cron: "0 4 * * 1"
+
+  push:
+    branches: [main]
+    paths:
+      - "docker/claude-runner.dockerfile"
+
+env:
+  REGISTRY: ghcr.io
+  IMAGE_NAME: russianoracle-dev/claude-runner
+
+jobs:
+  build-and-push:
+    name: "🐳 Build & Push claude-runner"
+    runs-on: ubuntu-latest
+    timeout-minutes: 30
+
+    permissions:
+      contents: read
+      packages: write
+
+    steps:
+      - name: "📥 Checkout repository"
+        uses: actions/checkout@v4
+
+      - name: "🔑 Login to GHCR"
+        uses: docker/login-action@v3
+        with:
+          registry: ${{ env.REGISTRY }}
+          username: ${{ github.actor }}
+          password: ${{ secrets.GITHUB_TOKEN }}
+
+      - name: "🏷️ Extract Docker metadata"
+        id: meta
+        uses: docker/metadata-action@v5
+        with:
+          images: ${{ env.REGISTRY }}/${{ env.IMAGE_NAME }}
+          tags: |
+            type=raw,value=latest,enable={{is_default_branch}}
+            type=sha,prefix=sha-,format=short
+            type=schedule,pattern=weekly-{{date 'YYYY-MM-DD'}}
+
+      - name: "🔨 Build and push Docker image"
+        uses: docker/build-push-action@v5
+        with:
+          context: .
+          file: docker/claude-runner.dockerfile
+          push: ${{ github.event.inputs.push_image != 'false' }}
+          tags: ${{ steps.meta.outputs.tags }}
+          labels: ${{ steps.meta.outputs.labels }}
+          # Cache layers from previous builds to speed up rebuilds
+          cache-from: type=registry,ref=${{ env.REGISTRY }}/${{ env.IMAGE_NAME }}:latest
+          cache-to: type=inline
+
+      - name: "📋 Image summary"
+        run: |
+          echo "## Docker Image Built" >> $GITHUB_STEP_SUMMARY
+          echo "" >> $GITHUB_STEP_SUMMARY
+          echo "**Image:** \`${{ env.REGISTRY }}/${{ env.IMAGE_NAME }}\`" >> $GITHUB_STEP_SUMMARY
+          echo "" >> $GITHUB_STEP_SUMMARY
+          echo "**Tags:**" >> $GITHUB_STEP_SUMMARY
+          echo "\`\`\`" >> $GITHUB_STEP_SUMMARY
+          echo "${{ steps.meta.outputs.tags }}" >> $GITHUB_STEP_SUMMARY
+          echo "\`\`\`" >> $GITHUB_STEP_SUMMARY
+          echo "" >> $GITHUB_STEP_SUMMARY
+          echo "**Usage in install-claude-plugins action:**" >> $GITHUB_STEP_SUMMARY
+          echo "Cache hit on warm runner: ~3-5 seconds vs ~90 seconds with curl install." >> $GITHUB_STEP_SUMMARY

@@ -1,41 +1,53 @@
 name: "Install Claude Code & Plugins"
-description: "Installs Claude Code CLI and sets up plugins idempotently"
+description: "Extracts Claude Code CLI and plugins from pre-built Docker image (fast, cached)"
 
 inputs:
-  claude_version:
-    description: "Claude Code CLI version to install"
+  image:
+    description: "Claude runner Docker image to pull"
     required: false
-    default: "latest"
+    default: "ghcr.io/russianoracle-dev/claude-runner:latest"
 
 outputs:
   claude_path:
     description: "Path to installed Claude executable"
-    value: ${{ steps.install.outputs.claude_path }}
+    value: ${{ steps.extract.outputs.claude_path }}
 
 runs:
   using: composite
   steps:
-    - name: Install Claude Code & setup plugins
-      id: install
+    - name: "🐳 Pull claude-runner image"
+      id: pull
       shell: bash
       run: |
-        CLAUDE_CODE_VERSION="${{ inputs.claude_version }}"
-        if [ "$CLAUDE_CODE_VERSION" = "latest" ]; then
-          curl -fsSL https://claude.ai/install.sh | bash
-        else
-          curl -fsSL https://claude.ai/install.sh | bash -s -- "$CLAUDE_CODE_VERSION"
-        fi
-        export PATH="$HOME/.local/bin:$PATH"
-        echo "$HOME/.local/bin" >> "$GITHUB_PATH"
+        IMAGE="${{ inputs.image }}"
+        echo "Pulling image: $IMAGE"
+        docker pull "$IMAGE"
+        echo "✅ Image pulled"
 
-        echo "Adding plugin marketplaces..."
-        claude plugin marketplace add https://github.com/obra/superpowers-marketplace.git || echo "⚠️ already added, continuing"
-        claude plugin marketplace add https://github.com/anthropics/claude-plugins-official.git || echo "⚠️ already added, continuing"
+    - name: "📦 Extract claude binary and plugins"
+      id: extract
+      shell: bash
+      run: |
+        IMAGE="${{ inputs.image }}"
 
-        echo "Installing plugins..."
-        claude plugin install superpowers@superpowers-marketplace
-        claude plugin install feature-dev@claude-plugins-official
-        claude plugin install serena@claude-plugins-official
-        echo "✅ Plugins installed"
+        # Create a temporary container (not started) to copy files out
+        CONTAINER_ID=$(docker create "$IMAGE")
 
-        echo "claude_path=$HOME/.local/bin/claude" >> "$GITHUB_OUTPUT"
+        # Extract the Claude binary
+        docker cp "$CONTAINER_ID:/root/.local/bin/claude" /tmp/claude-runner
+        chmod +x /tmp/claude-runner
+
+        # Extract plugins directory (non-fatal if missing — first run after clean image)
+        mkdir -p "$HOME/.claude"
+        docker cp "$CONTAINER_ID:/root/.claude/plugins" "$HOME/.claude/plugins" 2>/dev/null \
+          && echo "✅ Plugins extracted" \
+          || echo "⚠️ No plugins dir in image, skipping"
+
+        # Remove the temporary container
+        docker rm "$CONTAINER_ID"
+
+        # Verify binary works
+        /tmp/claude-runner --version
+
+        echo "claude_path=/tmp/claude-runner" >> "$GITHUB_OUTPUT"
+        echo "✅ Claude Code ready at /tmp/claude-runner"
