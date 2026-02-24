@@ -60,6 +60,20 @@ runs:
           && echo "✅ Plugins extracted" \
           || echo "⚠️ No plugins dir in image, skipping"
 
+        # Extract uv/uvx binaries (needed for serena MCP server)
+        UV_DIR="/tmp/uv-runner-${GITHUB_RUN_ID}"
+        mkdir -p "$UV_DIR"
+        UV_REAL_PATH=$(docker run --rm "$IMAGE" sh -c 'readlink -f /root/.local/bin/uv' 2>/dev/null || echo "")
+        if [ -n "$UV_REAL_PATH" ]; then
+          docker run --rm "$IMAGE" cat "$UV_REAL_PATH" > "$UV_DIR/uv"
+          chmod +x "$UV_DIR/uv"
+          ln -sf "$UV_DIR/uv" "$UV_DIR/uvx"
+          echo "$UV_DIR" >> "$GITHUB_PATH"
+          echo "✅ uv/uvx extracted to $UV_DIR"
+        else
+          echo "⚠️ uv not found in image, serena MCP server may not work"
+        fi
+
         # Remove the temporary container
         docker rm "$CONTAINER_ID"
 
