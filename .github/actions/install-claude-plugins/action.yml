@@ -30,15 +30,28 @@ runs:
       run: |
         IMAGE="${{ inputs.image }}"
 
+        # Diagnostics
+        echo "Runner arch: $(uname -m)"
+        echo "Image platform:"
+        docker image inspect "$IMAGE" --format '{{.Architecture}}/{{.Os}}' 2>/dev/null || true
+
         # Create a temporary container (not started) to copy files out
         CONTAINER_ID=$(docker create "$IMAGE")
 
         # Unique path per run to avoid stale file conflicts
         CLAUDE_BIN="/tmp/claude-runner-${GITHUB_RUN_ID}"
 
-        # Extract binary: pipe through tar so the file is created by the runner user (not root)
-        docker cp "$CONTAINER_ID:/root/.local/bin/claude" - | tar -xO > "$CLAUDE_BIN"
+        # Check if /root/.local/bin/claude is a symlink inside the container
+        REAL_PATH=$(docker run --rm "$IMAGE" sh -c 'readlink -f /root/.local/bin/claude' 2>/dev/null || echo "/root/.local/bin/claude")
+        echo "Claude binary real path in image: $REAL_PATH"
+
+        # Extract real binary content (follows symlinks via docker run + cat)
+        docker run --rm "$IMAGE" cat "$REAL_PATH" > "$CLAUDE_BIN"
         chmod +x "$CLAUDE_BIN"
+
+        # Diagnostics: show what we extracted
+        echo "Binary size: $(wc -c < "$CLAUDE_BIN") bytes"
+        echo "Binary type: $(file "$CLAUDE_BIN" 2>/dev/null || head -c 4 "$CLAUDE_BIN" | xxd || true)"
 
         # Extract plugins directory
         mkdir -p "$HOME/.claude"
