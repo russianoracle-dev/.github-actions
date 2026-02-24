@@ -33,7 +33,8 @@ runs:
         # Create a temporary container (not started) to copy files out
         CONTAINER_ID=$(docker create "$IMAGE")
 
-        # Extract the Claude binary
+        # Extract the Claude binary (remove stale file first to avoid permission issues)
+        rm -f /tmp/claude-runner
         docker cp "$CONTAINER_ID:/root/.local/bin/claude" /tmp/claude-runner
         chmod +x /tmp/claude-runner
 
