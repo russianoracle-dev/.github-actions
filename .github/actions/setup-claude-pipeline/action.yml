@@ -59,13 +59,13 @@ runs:
         # Language directive — always prepended, cannot be overridden by project prompts
         printf '## Language (MANDATORY)\n\n**ВСЕГДА отвечай ТОЛЬКО на русском языке.** Все комментарии, объяснения, commit messages, PR описания, комментарии к issues — только по-русски. Технические термины, идентификаторы кода и имена файлов остаются в оригинальном виде.\n\n---\n\n' > /tmp/system-prompt.txt
 
-        cat >> /tmp/system-prompt.txt << 'SYSPROMPT_EOF'
-        ${BASE}
+        cat >> /tmp/system-prompt.txt << SYSPROMPT_EOF
+${BASE}
 
-        ---
+---
 
-        ${ROLE_PROMPT}
-        SYSPROMPT_EOF
+${ROLE_PROMPT}
+SYSPROMPT_EOF
 
         # Append action context if provided
         if [ -n "$ACTION_CONTEXT" ]; then
@@ -110,25 +110,25 @@ runs:
         fi
 
         cat > /tmp/progress-instructions.txt << PROGRESS_EOF
-        ## PROGRESS REPORTING
+## PROGRESS REPORTING
 
-        Используй MCP tool для обновления прогресса — НЕ bash/gh cli:
-        **Tool:** ${PROGRESS_TOOL}
+Используй MCP tool для обновления прогресса — НЕ bash/gh cli:
+**Tool:** ${PROGRESS_TOOL}
 
-        \`\`\`
-        ${PROGRESS_EXAMPLE}
-        \`\`\`
+\`\`\`
+${PROGRESS_EXAMPLE}
+\`\`\`
 
-        С таким телом:
-        \`\`\`
-        ## Implementation Progress
+С таким телом:
+\`\`\`
+## Implementation Progress
 
-        ### Understanding
-        [Как понял задачу]
+### Understanding
+[Как понял задачу]
 
-        ### TODO
-        - [x] Завершённые шаги
-        - [ ] Текущий шаг
-        - [ ] Оставшиеся шаги
-        \`\`\`
-        PROGRESS_EOF
+### TODO
+- [x] Завершённые шаги
+- [ ] Текущий шаг
+- [ ] Оставшиеся шаги
+\`\`\`
+PROGRESS_EOF
