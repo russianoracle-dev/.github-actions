@@ -34,9 +34,9 @@ runs:
     - name: Load system prompts
       shell: bash
       run: |
-        ROLE="${{ inputs.role }}"
+        ROLE="\${{ inputs.role }}"
         BASE=$(cat .github/system-prompts/_base.md)
-        ROLE_PROMPT=$(cat ".github/system-prompts/${ROLE}.md")
+        ROLE_PROMPT=$(cat ".github/system-prompts/\${ROLE}.md")
 
         GITHUB_MCP_GUIDE=""
         if [ -f ".github/system-prompts/github-mcp-usage.md" ]; then
@@ -49,88 +49,91 @@ runs:
         fi
 
         ACTION_CONTEXT=""
-        if [ -n "${{ inputs.action }}" ]; then
-          ACTION_CONTEXT="**Detected Action:** ${{ inputs.action }}
-        **Role:** ${{ inputs.role }}
+        if [ -n "\${{ inputs.action }}" ]; then
+          ACTION_CONTEXT="__STAR__Detected Action__STAR__: \${{ inputs.action }}
+        __STAR__Role__STAR__: \${{ inputs.role }}
 
         The user triggered this action via @claude mention or Linear status change. Proceed with the detected action above."
         fi
 
         # Language directive — always prepended, cannot be overridden by project prompts
-        printf '## Language (MANDATORY)\n\n**ВСЕГДА отвечай ТОЛЬКО на русском языке.** Все комментарии, объяснения, commit messages, PR описания, комментарии к issues — только по-русски. Технические термины, идентификаторы кода и имена файлов остаются в оригинальном виде.\n\n---\n\n' > /tmp/system-prompt.txt
-
-        cat >> /tmp/system-prompt.txt << SYSPROMPT_EOF
-${BASE}
-
- ---
-
-${ROLE_PROMPT}
-SYSPROMPT_EOF
-        sed -i.bak 's/^ ---$/---/g' /tmp/system-prompt.txt
+        printf '## Language (MANDATORY)\\n\\n__STAR__ВСЕГДА отвечай ТОЛЬКО на русском языке.__STAR__ Все комментарии, объяснения, commit messages, PR описания, комментарии к issues — только по-русски. Технические термины, идентификаторы кода и имена файлов остаются в оригинальном виде.\\n\\nXXX_DASH_XXX\\n\\n' > /tmp/system-prompt.txt
+        sed -i.bak 's|XXX_DASH_XXX|---|g' /tmp/system-prompt.txt
+        sed -i.bak 's|__STAR__|**|g' /tmp/system-prompt.txt
         rm -f /tmp/system-prompt.txt.bak
+
+        {
+          echo ""
+          echo "\${BASE}"
+          echo ""
+          echo "---"
+          echo ""
+          echo "\${ROLE_PROMPT}"
+        } >> /tmp/system-prompt.txt
 
         # Append action context if provided
         if [ -n "$ACTION_CONTEXT" ]; then
-          printf '\n---\n\n%s\n' "$ACTION_CONTEXT" >> /tmp/system-prompt.txt
+          printf '\\n%s\\n\\n%s\\n' "XXX_DASH_XXX" "$ACTION_CONTEXT" >> /tmp/system-prompt.txt
         fi
 
         # Append GitHub MCP guide if present
         if [ -n "$GITHUB_MCP_GUIDE" ]; then
-          printf '\n---\n\n%s\n' "$GITHUB_MCP_GUIDE" >> /tmp/system-prompt.txt
+          printf '\\n%s\\n\\n%s\\n' "XXX_DASH_XXX" "$GITHUB_MCP_GUIDE" >> /tmp/system-prompt.txt
         fi
 
         # Append Linear integration guide if present
         if [ -n "$LINEAR_GUIDE" ]; then
-          printf '\n---\n\n%s\n' "$LINEAR_GUIDE" >> /tmp/system-prompt.txt
+          printf '\\n%s\\n\\n%s\\n' "XXX_DASH_XXX" "$LINEAR_GUIDE" >> /tmp/system-prompt.txt
         fi
 
     - name: Create MCP config
       shell: bash
       env:
-        ANTHROPIC_API_KEY: ${{ inputs.anthropic_api_key }}
-        GITHUB_TOKEN: ${{ inputs.github_token }}
-        LINEAR_API_KEY: ${{ inputs.linear_api_key }}
+        ANTHROPIC_API_KEY: \${{ inputs.anthropic_api_key }}
+        GITHUB_TOKEN: \${{ inputs.github_token }}
+        LINEAR_API_KEY: \${{ inputs.linear_api_key }}
       run: |
-        cat .github/mcp-servers.json | \
-          sed "s|\${ANTHROPIC_API_KEY}|${ANTHROPIC_API_KEY}|g" | \
-          sed "s|\${GITHUB_TOKEN}|${GITHUB_TOKEN}|g" | \
-          sed "s|\${LINEAR_API_KEY}|${LINEAR_API_KEY}|g" \
+        cat .github/mcp-servers.json | \\
+          sed "s|\\\${ANTHROPIC_API_KEY}|\${ANTHROPIC_API_KEY}|g" | \\
+          sed "s|\\\${GITHUB_TOKEN}|\${GITHUB_TOKEN}|g" | \\
+          sed "s|\\\${LINEAR_API_KEY}|\${LINEAR_API_KEY}|g" \\
           > /tmp/mcp-config.json
 
     - name: Create progress instructions
       shell: bash
       run: |
-        ISSUE_NUM="${{ inputs.issue_number }}"
-        IS_DISPATCH="${{ inputs.is_dispatch }}"
+        ISSUE_NUM="\${{ inputs.issue_number }}"
+        IS_DISPATCH="\${{ inputs.is_dispatch }}"
 
         if [ "$IS_DISPATCH" = "true" ]; then
-          PROGRESS_TOOL="mcp__github__add_issue_comment с issue_number=${ISSUE_NUM}"
-          PROGRESS_EXAMPLE="mcp__github__add_issue_comment(owner=\"russianoracle-dev\", repo=\"semantic-search-mcp\", issue_number=${ISSUE_NUM}, body=\"...\")"
+          PROGRESS_TOOL="mcp__github__add_issue_comment с issue_number=\${ISSUE_NUM}"
+          PROGRESS_EXAMPLE="mcp__github__add_issue_comment(owner=\"russianoracle-dev\", repo=\"semantic-search-mcp\", issue_number=\${ISSUE_NUM}, body=\"...\")"
         else
           PROGRESS_TOOL="mcp__github_comment__update_claude_comment (CLAUDE_COMMENT_ID задан автоматически)"
           PROGRESS_EXAMPLE="mcp__github_comment__update_claude_comment(body=\"...\")"
         fi
 
-        cat > /tmp/progress-instructions.txt << PROGRESS_EOF
-## PROGRESS REPORTING
-
-Используй MCP tool для обновления прогресса — НЕ bash/gh cli:
-**Tool:** ${PROGRESS_TOOL}
-
-\`\`\`
-${PROGRESS_EXAMPLE}
-\`\`\`
-
-С таким телом:
-\`\`\`
-## Implementation Progress
-
-### Understanding
-[Как понял задачу]
-
-### TODO
-- [x] Завершённые шаги
-- [ ] Текущий шаг
-- [ ] Оставшиеся шаги
-\`\`\`
-PROGRESS_EOF
+        printf '%s\\n\\n' "## PROGRESS REPORTING" > /tmp/progress-instructions.txt
+        printf '%s\\n\\n' "Используй MCP tool для обновления прогресса XXX_DASH_NE_BASH_XXX gh cli" >> /tmp/progress-instructions.txt
+        printf '%s: %s\\n\\n' "__STAR__Tool__STAR__" "XXX_PLACEHOLDER_TOOL_XXX" >> /tmp/progress-instructions.txt
+        printf '%s\\n' "XXX_CODE_XXX" >> /tmp/progress-instructions.txt
+        printf '%s\\n' "XXX_PLACEHOLDER_EXAMPLE_XXX" >> /tmp/progress-instructions.txt
+        printf '%s\\n\\n' "XXX_CODE_XXX" >> /tmp/progress-instructions.txt
+        printf '%s\\n' "С таким телом" >> /tmp/progress-instructions.txt
+        printf '%s\\n' "XXX_CODE_XXX" >> /tmp/progress-instructions.txt
+        printf '%s\\n' "## Implementation Progress" >> /tmp/progress-instructions.txt
+        printf '%s\\n' "" >> /tmp/progress-instructions.txt
+        printf '%s\\n' "### Understanding" >> /tmp/progress-instructions.txt
+        printf '%s\\n' "[Как понял задачу]" >> /tmp/progress-instructions.txt
+        printf '%s\\n' "" >> /tmp/progress-instructions.txt
+        printf '%s\\n' "### TODO" >> /tmp/progress-instructions.txt
+        printf '%s\\n' "- [x] Завершённые шаги" >> /tmp/progress-instructions.txt
+        printf '%s\\n' "- [ ] Текущий шаг" >> /tmp/progress-instructions.txt
+        printf '%s\\n' "- [ ] Оставшиеся шаги" >> /tmp/progress-instructions.txt
+        printf '%s\\n' "XXX_CODE_XXX" >> /tmp/progress-instructions.txt
+        sed -i.bak "s|XXX_PLACEHOLDER_TOOL_XXX|\${PROGRESS_TOOL}|g" /tmp/progress-instructions.txt
+        sed -i.bak "s|XXX_PLACEHOLDER_EXAMPLE_XXX|\${PROGRESS_EXAMPLE}|g" /tmp/progress-instructions.txt
+        sed -i.bak "s|XXX_CODE_XXX|\\\\\\`\\\\\\`\\\\\\`|g" /tmp/progress-instructions.txt
+        sed -i.bak "s|XXX_DASH_NE_BASH_XXX|--- NE bash/gh|g" /tmp/progress-instructions.txt
+        sed -i.bak "s|__STAR__|**|g" /tmp/progress-instructions.txt
+        rm -f /tmp/progress-instructions.txt.bak
