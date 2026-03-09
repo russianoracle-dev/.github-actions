@@ -1,0 +1,54 @@
+name: Validate Workflows
+
+on:
+  push:
+    paths: ['.github/workflows/**']
+  pull_request:
+    paths: ['.github/workflows/**']
+  workflow_dispatch:
+
+env:
+  TOOLS_PATH: /home/openclaw/gh-tools/bin
+
+jobs:
+  validate:
+    runs-on: self-hosted
+    timeout-minutes: 5
+
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+
+      - name: Validate with actionlint
+        run: |
+          $TOOLS_PATH/actionlint .github/workflows/*.yml 2>&1 | tee actionlint-report.txt || true
+
+      - name: Validate with JSON Schema
+        run: |
+          $TOOLS_PATH/check-jsonschema --builtin-schema vendor.github-workflows .github/workflows/*.yml 2>&1 | tee schema-report.txt || true
+
+      - name: Security scan
+        run: |
+          echo "=== Checking for script injection ===" && for f in .github/workflows/*.yml; do
+            if grep -qE 'run:.*\$\{\{.*github\.(event\.(issue|pull_request)\.(title|body)|head_ref)\}\}' "$f" 2>/dev/null; then
+              echo "⚠️ INJECTION RISK: $f"
+            fi
+          done
+          echo ""
+          echo "=== Checking for hardcoded secrets ===" && for f in .github/workflows/*.yml; do
+            if grep -iE '(password|secret|token|api_key)\s*[:=]\s*["\x27][^"$\x27]+' "$f" 2>/dev/null | grep -v '\$\{\{' | grep -v '#'; then
+              echo "⚠️ HARDCODED SECRET: $f"
+            fi
+          done
+          echo ""
+          echo "✅ Validation complete!"
+
+      - name: Upload reports
+        uses: actions/upload-artifact@v4
+        if: always()
+        with:
+          name: validation-reports
+          path: |
+            actionlint-report.txt
+            schema-report.txt
+          retention-days: 7
