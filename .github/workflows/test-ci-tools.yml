@@ -10,7 +10,7 @@ jobs:
   # Job 1: Check basic system tools
   system-tools:
     name: System Tools
-    runs-on: [self-hosted, linux]
+    runs-on: [self-hosted, Linux]
     timeout-minutes: 5
     steps:
       - name: Check bash
@@ -51,7 +51,7 @@ jobs:
   # Job 2: Check YAML/JSON tools
   yaml-json-tools:
     name: YAML/JSON Tools
-    runs-on: [self-hosted, linux]
+    runs-on: [self-hosted, Linux]
     timeout-minutes: 5
     steps:
       - name: Check yamllint
@@ -77,7 +77,7 @@ jobs:
   # Job 3: Check Node.js/npm tools
   nodejs-tools:
     name: Node.js/npm Tools
-    runs-on: [self-hosted, linux]
+    runs-on: [self-hosted, Linux]
     timeout-minutes: 5
     steps:
       - name: Check node
@@ -103,7 +103,7 @@ jobs:
   # Job 4: Check Python tools
   python-tools:
     name: Python Tools
-    runs-on: [self-hosted, linux]
+    runs-on: [self-hosted, Linux]
     timeout-minutes: 5
     steps:
       - name: Check python
@@ -129,7 +129,7 @@ jobs:
   # Job 5: Check Docker tools
   docker-tools:
     name: Docker Tools
-    runs-on: [self-hosted, linux]
+    runs-on: [self-hosted, Linux]
     timeout-minutes: 5
     steps:
       - name: Check docker
