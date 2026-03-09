@@ -1,0 +1,148 @@
+name: Test CI Tools
+
+on:
+  workflow_dispatch:
+  push:
+    paths:
+      - '.github/workflows/test-ci-tools.yml'
+
+jobs:
+  # Job 1: Check basic system tools
+  system-tools:
+    name: System Tools
+    runs-on: [self-hosted, linux]
+    timeout-minutes: 5
+    steps:
+      - name: Check bash
+        run: |
+          bash --version
+          echo "✅ bash available"
+
+      - name: Check curl
+        run: |
+          curl --version
+          echo "✅ curl available"
+
+      - name: Check wget
+        run: |
+          wget --version
+          echo "✅ wget available"
+
+      - name: Check jq
+        run: |
+          jq --version
+          echo "✅ jq available"
+
+      - name: Check yq
+        run: |
+          yq --version
+          echo "✅ yq available"
+
+      - name: Check git
+        run: |
+          git --version
+          echo "✅ git available"
+
+      - name: Check gh CLI
+        run: |
+          gh --version
+          echo "✅ gh CLI available"
+
+  # Job 2: Check YAML/JSON tools
+  yaml-json-tools:
+    name: YAML/JSON Tools
+    runs-on: [self-hosted, linux]
+    timeout-minutes: 5
+    steps:
+      - name: Check yamllint
+        run: |
+          yamllint --version
+          echo "✅ yamllint available"
+
+      - name: Check jsonlint
+        run: |
+          jsonlint --version 2>/dev/null || echo "jsonlint not installed (optional)"
+          echo "✅ jsonlint check complete"
+
+      - name: Test jq with JSON
+        run: |
+          echo '{"test": "value"}' | jq '.test'
+          echo "✅ jq JSON processing works"
+
+      - name: Test yq with YAML
+        run: |
+          echo 'test: value' | yq '.test'
+          echo "✅ yq YAML processing works"
+
+  # Job 3: Check Node.js/npm tools
+  nodejs-tools:
+    name: Node.js/npm Tools
+    runs-on: [self-hosted, linux]
+    timeout-minutes: 5
+    steps:
+      - name: Check node
+        run: |
+          node --version
+          echo "✅ node available"
+
+      - name: Check npm
+        run: |
+          npm --version
+          echo "✅ npm available"
+
+      - name: Check npx
+        run: |
+          npx --version
+          echo "✅ npx available"
+
+      - name: Test npx cache
+        run: |
+          npx --yes --package=cowsay cowsay "npx test"
+          echo "✅ npx with --yes works"
+
+  # Job 4: Check Python tools
+  python-tools:
+    name: Python Tools
+    runs-on: [self-hosted, linux]
+    timeout-minutes: 5
+    steps:
+      - name: Check python
+        run: |
+          python3 --version
+          echo "✅ python3 available"
+
+      - name: Check pip
+        run: |
+          pip3 --version
+          echo "✅ pip3 available"
+
+      - name: Check pytest
+        run: |
+          pytest --version
+          echo "✅ pytest available"
+
+      - name: Check ruff
+        run: |
+          ruff --version
+          echo "✅ ruff available"
+
+  # Job 5: Check Docker tools
+  docker-tools:
+    name: Docker Tools
+    runs-on: [self-hosted, linux]
+    timeout-minutes: 5
+    steps:
+      - name: Check docker
+        run: |
+          docker --version
+          echo "✅ docker available"
+
+      - name: Check docker-compose
+        run: |
+          docker-compose --version || docker compose version
+          echo "✅ docker compose available"
+
+      - name: Test docker info
+        run: |
+          docker info > /dev/null 2>&1
+          echo "✅ docker daemon is running"
