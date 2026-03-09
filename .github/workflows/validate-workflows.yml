@@ -7,36 +7,51 @@ on:
     paths: ['.github/workflows/**']
   workflow_dispatch:
 
-env:
-  TOOLS_PATH: /home/openclaw/gh-tools/bin
-
 jobs:
   validate:
     runs-on: self-hosted
-    timeout-minutes: 5
+    timeout-minutes: 10
 
     steps:
       - name: Checkout
         uses: actions/checkout@v4
 
+      - name: Setup tools
+        run: |
+          mkdir -p /tmp/gh-tools/bin
+          cd /tmp/gh-tools
+
+          # actionlint
+          curl -sL https://github.com/rhysd/actionlint/releases/download/v1.7.11/actionlint_1.7.11_linux_amd64.tar.gz | tar xz -C bin/
+
+          # yamllint & check-jsonschema (via pip with --break-system-packages)
+          pip3 install --break-system-packages yamllint check-jsonschema 2>/dev/null || \
+            python3 -m pip install --user yamllint check-jsonschema 2>/dev/null || \
+            pip3 install --target=/tmp/gh-tools/py-pkgs yamllint check-jsonschema
+
+          export PATH="/tmp/gh-tools/bin:$HOME/.local/bin:$PATH"
+          echo "PATH=$PATH" >> $GITHUB_ENV
+
       - name: Validate with actionlint
         run: |
-          $TOOLS_PATH/actionlint .github/workflows/*.yml 2>&1 | tee actionlint-report.txt || true
+          /tmp/gh-tools/bin/actionlint .github/workflows/*.yml 2>&1 | tee actionlint-report.txt || true
 
       - name: Validate with JSON Schema
         run: |
-          $TOOLS_PATH/check-jsonschema --builtin-schema vendor.github-workflows .github/workflows/*.yml 2>&1 | tee schema-report.txt || true
+          check-jsonschema --builtin-schema vendor.github-workflows .github/workflows/*.yml 2>&1 | tee schema-report.txt || true
 
       - name: Security scan
         run: |
-          echo "=== Checking for script injection ===" && for f in .github/workflows/*.yml; do
+          echo "=== Script injection check ==="
+          for f in .github/workflows/*.yml; do
             if grep -qE 'run:.*\$\{\{.*github\.(event\.(issue|pull_request)\.(title|body)|head_ref)\}\}' "$f" 2>/dev/null; then
               echo "⚠️ INJECTION RISK: $f"
             fi
           done
           echo ""
-          echo "=== Checking for hardcoded secrets ===" && for f in .github/workflows/*.yml; do
-            if grep -iE '(password|secret|token|api_key)\s*[:=]\s*["\x27][^"$\x27]+' "$f" 2>/dev/null | grep -v '\$\{\{' | grep -v '#'; then
+          echo "=== Hardcoded secrets check ==="
+          for f in .github/workflows/*.yml; do
+            if grep -iE '(password|secret|token|api_key)\s*[:=]\s*["'"'"'][^"'"'"']+' "$f" 2>/dev/null | grep -v '\$\{\{' | grep -v '#'; then
               echo "⚠️ HARDCODED SECRET: $f"
             fi
           done
