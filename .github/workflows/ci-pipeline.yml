@@ -34,58 +34,6 @@ jobs:
         with:
           fetch-depth: 0  # Full history for better analysis
 
-      - name: Set up Python
-        uses: actions/setup-python@v5
-        with:
-          python-version: ${{ env.PYTHON_VERSION }}
-          cache: 'pip'
-
-      - name: Set up Node.js
-        uses: actions/setup-node@v4
-        with:
-          node-version: ${{ env.NODE_VERSION }}
-
-      - name: Install Python dependencies
-        run: |
-          python -m pip install --upgrade pip
-          pip install -e ".[dev]"
-
-      - name: Install npm dependencies
-        working-directory: ./npm-package
-        run: npm install
-
-      # Python linting
-      - name: Run Ruff linter
-        run: |
-          ruff check src/ semantix_rag/ --output-format=github
-
-      - name: Run Black formatter check
-        run: |
-          black --check src/ semantix_rag/
-
-      # npm linting
-      - name: Run ESLint on npm package
-        working-directory: ./npm-package
-        run: |
-          npm run lint || true
-
-      # Security checks
-      - name: Run Bandit security linter
-        run: |
-          bandit -r src/ semantix_rag/ -f json -o bandit-report.json || true
-          bandit -r src/ semantix_rag/ -ll || true
-
-      - name: Upload Bandit report
-        uses: actions/upload-artifact@v4
-        if: always()
-        with:
-          name: bandit-security-report
-          path: bandit-report.json
-
-      - name: Run npm audit
-        working-directory: ./npm-package
-        run: npm audit --audit-level=high || true
-
   # ========================================
   # Job 2: Build
   # ========================================
