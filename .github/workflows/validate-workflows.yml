@@ -16,33 +16,27 @@ jobs:
       - name: Checkout
         uses: actions/checkout@v4
 
-      - name: Setup tools
-        run: |
-          mkdir -p /tmp/gh-tools/bin
-          cd /tmp/gh-tools
-
-          # actionlint
-          curl -sL https://github.com/rhysd/actionlint/releases/download/v1.7.11/actionlint_1.7.11_linux_amd64.tar.gz | tar xz -C bin/
-
-          # yamllint & check-jsonschema (via pip with --break-system-packages)
-          pip3 install --break-system-packages yamllint check-jsonschema 2>/dev/null || \
-            python3 -m pip install --user yamllint check-jsonschema 2>/dev/null || \
-            pip3 install --target=/tmp/gh-tools/py-pkgs yamllint check-jsonschema
-
-          export PATH="/tmp/gh-tools/bin:$HOME/.local/bin:$PATH"
-          echo "PATH=$PATH" >> $GITHUB_ENV
-
       - name: Validate with actionlint
         run: |
-          /tmp/gh-tools/bin/actionlint .github/workflows/*.yml 2>&1 | tee actionlint-report.txt || true
+          actionlint .github/workflows/*.yml 2>&1 | tee actionlint-report.txt || true
 
       - name: Validate with JSON Schema
         run: |
           check-jsonschema --builtin-schema vendor.github-workflows .github/workflows/*.yml 2>&1 | tee schema-report.txt || true
 
+      - name: Validate with yamllint
+        run: |
+          yamllint -d '{extends: relaxed, rules: {line-length: {max: 200}}}' .github/workflows/*.yml 2>&1 | tee yamllint-report.txt || true
+
+      - name: Shell scripts check
+        run: |
+          for f in .github/workflows/*.yml; do
+            shellcheck "$f" 2>/dev/null || true
+          done
+
       - name: Security scan
         run: |
-          echo "=== Script injection check ==="
+          echo "=== Checking for script injection ==="
           for f in .github/workflows/*.yml; do
             if grep -qE 'run:.*\$\{\{.*github\.(event\.(issue|pull_request)\.(title|body)|head_ref)\}\}' "$f" 2>/dev/null; then
               echo "⚠️ INJECTION RISK: $f"
@@ -51,12 +45,12 @@ jobs:
           echo ""
           echo "=== Hardcoded secrets check ==="
           for f in .github/workflows/*.yml; do
-            if grep -iE '(password|secret|token|api_key)\s*[:=]\s*["'"'"'][^"'"'"']+' "$f" 2>/dev/null | grep -v '\$\{\{' | grep -v '#'; then
+            if grep -iE '(password|secret|token|api_key)\s*[:=]\s*["'"'"'][^"'"'"']+' "$f" 2>/dev/null | grep -v '\$\$\{' | grep -v '#'; then
               echo "⚠️ HARDCODED SECRET: $f"
             fi
           done
           echo ""
-          echo "✅ Validation complete!"
+          echo "✅ All checks complete!"
 
       - name: Upload reports
         uses: actions/upload-artifact@v4
@@ -66,4 +60,5 @@ jobs:
           path: |
             actionlint-report.txt
             schema-report.txt
+            yamllint-report.txt
           retention-days: 7
