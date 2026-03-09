@@ -93,10 +93,10 @@ runs:
         GITHUB_TOKEN: ${{ inputs.github_token }}
         LINEAR_API_KEY: ${{ inputs.linear_api_key }}
       run: |
-        cat .github/mcp-servers.json | \\
-          sed "s|\\\${ANTHROPIC_API_KEY}|${ANTHROPIC_API_KEY}|g" | \\
-          sed "s|\\\${GITHUB_TOKEN}|${GITHUB_TOKEN}|g" | \\
-          sed "s|\\\${LINEAR_API_KEY}|${LINEAR_API_KEY}|g" \\
+        cat .github/mcp-servers.json \\
+          | sed "s|\\\${ANTHROPIC_API_KEY}|${ANTHROPIC_API_KEY}|g" \\
+          | sed "s|\\\${GITHUB_TOKEN}|${GITHUB_TOKEN}|g" \\
+          | sed "s|\\\${LINEAR_API_KEY}|${LINEAR_API_KEY}|g" \\
           > /tmp/mcp-config.json
 
     - name: Create progress instructions
