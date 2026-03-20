@@ -601,6 +601,7 @@ jobs:
           claude_args: |
             --mcp-config /tmp/mcp-config.json
             --append-system-prompt /tmp/system-prompt.txt
+            --compact
           additional_permissions: |
             actions: read
           show_full_output: true
@@ -771,6 +772,23 @@ jobs:
           echo "https://x-access-token:${GH_TOKEN}@github.com" > ~/.git-credentials
           echo "✅ Git credentials configured for push"
 
+      - name: Load previous run context
+        env:
+          GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+          ISSUE_NUMBER: ${{ needs.router.outputs.issue_number }}
+        run: |
+          # Fetch last Claude progress comment from this issue for cross-run memory
+          PREV_CONTEXT=""
+          if [ -n "$ISSUE_NUMBER" ]; then
+            LAST_COMMENT=$(gh api repos/${{ github.repository }}/issues/${ISSUE_NUMBER}/comments \
+              --jq '[.[] | select(.body | startswith("## Implementation Progress"))] | last | .body // empty' 2>/dev/null || echo "")
+            if [ -n "$LAST_COMMENT" ]; then
+              PREV_CONTEXT="## Previous Run Progress (for context)\n\n${LAST_COMMENT}\n\n---\n"
+            fi
+          fi
+          printf '%s' "$PREV_CONTEXT" > /tmp/previous-context.txt
+          echo "Previous context loaded: $(wc -c < /tmp/previous-context.txt) bytes"
+
       - name: Implement
         uses: anthropics/claude-code-action@v1
         with:
@@ -786,6 +804,8 @@ jobs:
             --model ${{ needs.router.outputs.model }}
             --append-system-prompt /tmp/system-prompt.txt
             --append-system-prompt /tmp/progress-instructions.txt
+            --append-system-prompt /tmp/previous-context.txt
+            --compact
           additional_permissions: |
             actions: read
           show_full_output: true

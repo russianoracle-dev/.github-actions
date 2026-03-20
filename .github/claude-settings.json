@@ -9,7 +9,7 @@
     "CLAUDE_CODE_SUBAGENT_MODEL": "glm-4.7",
     "CLAUDE_CODE_DISABLE_NONESSENTIAL_TRAFFIC": "1",
     "MCP_TIMEOUT": "60000",
-    "MCP_TOOL_TIMEOUT": "45000",
+    "MCP_TOOL_TIMEOUT": "120000",
     "BASH_MAX_TIMEOUT_MS": "120000",
     "BASH_DEFAULT_TIMEOUT_MS": "30000",
     "BASH_MAX_OUTPUT_LENGTH": "50000",
@@ -17,13 +17,11 @@
     "ANTHROPIC_CACHE_TTL": "300",
     "CLAUDE_CODE_ENABLE_PROMPT_CACHING": "true",
     "ANTHROPIC_STREAM": "true",
-    "CLAUDE_CODE_STREAMING": "true"
+    "CLAUDE_CODE_STREAMING": "true",
+    "CLAUDE_CODE_MAX_TURNS": "200"
   },
   "permissions": {
-    "deny": [
-      "WebSearch",
-      "WebFetch"
-    ],
+    "deny": ["WebSearch", "WebFetch"],
     "allow": [
       "Bash(git:*)",
       "Bash(gh:*)",
